@@ -4,21 +4,78 @@
 #include <algorithm>
 
 
+/* ============= Strategy Queue ============ */
+StrategyQueue::StrategyQueue(): _size(0){}
+
+StrategyQueue::~StrategyQueue(){
+    clear();
+}
+
+bool StrategyQueue::empty() const{
+    return _size == 0;
+}
+
+size_t StrategyQueue::size() const{
+    return _size;
+}
+
+void StrategyQueue::push_initial(StrategyGraph* graph){
+    if( _buckets.empty() || graph->size < _buckets.begin()->first ){
+        _buckets[graph->size].push_back(graph);
+    }else{
+        _buckets.begin()->second.push_back(graph);
+    }
+    _size++;
+}
+
+bool StrategyQueue::push(StrategyGraph* graph, int max_tries){
+    // The largest key is the size of the graph at the front of the old vector.
+    // (The old code read front() of an empty vector when max_tries <= 0, hence
+    // the empty() check: the graph is queued in that case.)
+    if( _size >= max_tries && !empty() && _buckets.rbegin()->first <= graph->size ){
+        return false;
+    }
+    _buckets[graph->size].push_back(graph);
+    _size++;
+    return true;
+}
+
+StrategyGraph* StrategyQueue::pop(){
+    if( empty() ){
+        throw runtime_exception("StrategyQueue::pop(): queue is empty");
+    }
+    auto smallest = _buckets.begin();
+    StrategyGraph* graph = smallest->second.back();
+    smallest->second.pop_back();
+    if( smallest->second.empty() ){
+        _buckets.erase(smallest);
+    }
+    _size--;
+    return graph;
+}
+
+void StrategyQueue::clear(){
+    for( auto& bucket : _buckets ){
+        for( StrategyGraph* g : bucket.second ){
+            delete g;
+        }
+    }
+    _buckets.clear();
+    _size = 0;
+}
+
 /* ============= Compiler Task ============ */
 CompilerTask::CompilerTask(Arch* a):arch(a){}
 
+void CompilerTask::add_initial_strategy(StrategyGraph* graph){
+    pending_strategies.push_initial(graph);
+}
+
 void CompilerTask::add_strategy(StrategyGraph* graph, int max_tries){
-    vector<StrategyGraph*>::iterator g;
-    if( pending_strategies.size() >= max_tries && pending_strategies.front()->size <= graph->size ){
+    if( !pending_strategies.push(graph, max_tries) ){
         // If strategy list is already full with smaller strategies, ignore this one
         delete graph;
-        return;
     }
-    for( g = pending_strategies.begin();
-         g != pending_strategies.end() && (*g)->size >= graph->size;
-         g++ ){}
-    pending_strategies.insert(g, graph);
-    
 }
 
 ROPChain* CompilerTask::compile(Arch* arch, GadgetDB* db, Constraint* constraint, int nb_tries){
@@ -37,8 +94,7 @@ ROPChain* CompilerTask::compile(Arch* arch, GadgetDB* db, Constraint* constraint
             return nullptr;
         }
 
-        graph = pending_strategies.back();
-        pending_strategies.pop_back();
+        graph = pending_strategies.pop();
         if( graph->select_gadgets(*db, constraint, arch) ){
             res = graph->get_ropchain(arch, constraint);
         }else{
@@ -101,9 +157,6 @@ void CompilerTask::apply_rules_to_graph(StrategyGraph* graph, int max_tries){
 }
 
 void CompilerTask::clear(){
-    for( StrategyGraph* g : pending_strategies ){
-        delete g; g = nullptr;
-    }
     pending_strategies.clear();
 }
 
@@ -158,7 +211,7 @@ ROPChain* ROPCompiler::compile(string program, Constraint* constraint, ABI abi, 
 }
 
 ROPChain* ROPCompiler::process_simple(vector<ILInstruction>& ins, Constraint* constraint, ABI abi, System system){
-    CompilerTask task = CompilerTask(arch);
+    CompilerTask task(arch);
     ROPChain * res = nullptr, *tmp = nullptr;
     vector<ILInstruction> instructions;
     
@@ -167,8 +220,12 @@ ROPChain* ROPCompiler::process_simple(vector<ILInstruction>& ins, Constraint* co
 
     // Compile
     for( ILInstruction& instr : instructions ){
+        vector<StrategyGraph*> graphs;
         task.clear();
-        il_to_strategy(task.pending_strategies, instr, constraint, abi, system);
+        il_to_strategy(graphs, instr, constraint, abi, system);
+        for( StrategyGraph* graph : graphs ){
+            task.add_initial_strategy(graph);
+        }
         if( (tmp = task.compile(arch, db, constraint)) != nullptr){
             if( !res )
                 res = tmp;
@@ -185,7 +242,6 @@ ROPChain* ROPCompiler::process_simple(vector<ILInstruction>& ins, Constraint* co
 }
 
 ROPChain* ROPCompiler::process_complex(vector<ILInstruction>& ins, Constraint* constraint, ABI abi, System system){
-    CompilerTask task = CompilerTask(arch);
     ILInstruction instr =  ins[0];
 
     if( instr.type == ILInstructionType::SYSCALL ){
@@ -302,9 +358,13 @@ ROPChain* ROPCompiler::_set_registers_permutation( vector<ILInstruction>& instr,
 
     for( int i = 0; i < permutation.size(); i++ ){
         int idx = permutation[i];
+        vector<StrategyGraph*> graphs;
         tmp_perm.push_back(idx);
         task.clear();
-        il_to_strategy(task.pending_strategies, instr[idx], &constr);
+        il_to_strategy(graphs, instr[idx], &constr);
+        for( StrategyGraph* graph : graphs ){
+            task.add_initial_strategy(graph);
+        }
         // Add the register args to the constr (don't modify them)
         tmp_constr = constr;
         tmp_keep_regs.clear();
@@ -585,7 +645,7 @@ ROPChain* ROPCompiler::_compile_x64_system_v_call(ILInstruction& instr, Constrai
     
     // Get the chain that calls the function
     task.clear();
-    task.pending_strategies.push_back(graph);
+    task.add_initial_strategy(graph);
     tmp = task.compile(arch, db, &call_constr);
 
     if( !tmp ){
@@ -694,7 +754,7 @@ ROPChain* ROPCompiler::_compile_x64_ms_call(ILInstruction& instr, Constraint* co
     
     // Get the chain that calls the function
     task.clear();
-    task.pending_strategies.push_back(graph);
+    task.add_initial_strategy(graph);
     tmp = task.compile(arch, db, &call_constr);
 
     if( !tmp ){

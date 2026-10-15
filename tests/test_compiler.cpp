@@ -6,13 +6,22 @@
 #include <string>
 #include <sstream>
 #include <iomanip>
+#include <random>
 
 using std::cout;
-using std::endl; 
+using std::endl;
 using std::string;
 
 namespace test{
     namespace compiler{
+        unsigned int _assert(bool val, const string& msg){
+            if( !val){
+                cout << "\nFail: " << msg << endl << std::flush;
+                throw test_exception();
+            }
+            return 1;
+        }
+
         unsigned int _assert_ropchain(ROPChain* ropchain, const string& msg){
             if( ropchain == nullptr){
                 cout << "\nFail: " << msg << endl << std::flush; 
@@ -27,7 +36,160 @@ namespace test{
                 cout << "\nFail: " << msg << endl << std::flush; 
                 throw test_exception();
             }
-            return 1; 
+            return 1;
+        }
+
+        /* Reference model for StrategyQueue: the pending-strategy vector that
+           CompilerTask used before (sorted by decreasing size except for the
+           initial graphs, which were appended unsorted; popped from the back) */
+        class LegacyStrategyQueue{
+        public:
+            vector<StrategyGraph*> graphs;
+            void push_initial(StrategyGraph* graph){
+                graphs.push_back(graph);
+            }
+            bool push(StrategyGraph* graph, int max_tries){
+                vector<StrategyGraph*>::iterator g;
+                // !graphs.empty(): the old code read front() of an empty vector there
+                if( graphs.size() >= max_tries && !graphs.empty() && graphs.front()->size <= graph->size ){
+                    return false;
+                }
+                for( g = graphs.begin(); g != graphs.end() && (*g)->size >= graph->size; g++ ){}
+                graphs.insert(g, graph);
+                return true;
+            }
+            StrategyGraph* pop(){
+                StrategyGraph* graph = graphs.back();
+                graphs.pop_back();
+                return graph;
+            }
+        };
+
+        StrategyGraph* _new_graph_of_size(int size){
+            StrategyGraph* graph = new StrategyGraph();
+            graph->size = size;
+            return graph;
+        }
+
+        unsigned int strategy_queue_order(){
+            unsigned int nb = 0;
+            StrategyQueue queue;
+            vector<StrategyGraph*> g;
+            bool got_exception = false;
+
+            // Smallest first, last added first among equal sizes
+            for( int size : {3, 1, 2, 1, 3} ){
+                g.push_back(_new_graph_of_size(size));
+                queue.push(g.back(), 3000);
+            }
+            for( int i : {3, 1, 2, 4, 0} ){
+                StrategyGraph* popped = queue.pop();
+                nb += _assert(popped == g[i], "StrategyQueue: wrong pop order for sorted pushes");
+                delete popped;
+            }
+            nb += _assert(queue.empty(), "StrategyQueue: should be empty");
+            g.clear();
+
+            // Initial graphs are not sorted: old vector [2, 5, 1], pop 1, insert 3 at the front
+            for( int size : {2, 5, 1} ){
+                g.push_back(_new_graph_of_size(size));
+                queue.push_initial(g.back());
+            }
+            nb += _assert(queue.pop() == g[2], "StrategyQueue: wrong pop order for initial graphs");
+            delete g[2];
+            g.push_back(_new_graph_of_size(3));
+            queue.push(g.back(), 3000);
+            for( int i : {1, 0, 3} ){
+                StrategyGraph* popped = queue.pop();
+                nb += _assert(popped == g[i], "StrategyQueue: wrong pop order after initial graphs");
+                delete popped;
+            }
+            g.clear();
+
+            // Reject rule: full and no queued graph larger than the new one
+            for( int size : {2, 4} ){
+                g.push_back(_new_graph_of_size(size));
+                queue.push(g.back(), 3000);
+            }
+            StrategyGraph* big = _new_graph_of_size(4);
+            nb += _assert(!queue.push(big, 2), "StrategyQueue: should reject a graph when full");
+            delete big;
+            nb += _assert(queue.push(_new_graph_of_size(3), 2), "StrategyQueue: should accept a smaller graph when full");
+            nb += _assert(queue.size() == 3, "StrategyQueue: wrong size");
+            queue.clear();
+            nb += _assert(queue.empty(), "StrategyQueue: should be empty after clear()");
+
+            try{
+                queue.pop();
+            }catch(runtime_exception& e){
+                got_exception = true;
+            }
+            nb += _assert(got_exception, "StrategyQueue: pop() on an empty queue should throw");
+
+            return nb;
+        }
+
+        // Drive StrategyQueue and the legacy vector with the same random
+        // operations and check that they pop the same graphs in the same order.
+        // Both hold the same graph pointers: a graph is deleted only once both
+        // have dropped it, so a mismatch leaks instead of double freeing.
+        unsigned int strategy_queue_equivalence(){
+            unsigned int nb = 0;
+            std::mt19937 rng(0x5eed); // Fixed seed: reproducible
+
+            for( int round = 0; round < 100; round++ ){
+                StrategyQueue queue;
+                LegacyStrategyQueue legacy;
+                StrategyGraph* graph;
+                bool same = true;
+                int nb_sizes = 1 + rng() % 12; // Few distinct sizes -> many ties
+                int budget = rng() % 80; // Remaining tries, as in CompilerTask::compile()
+
+                for( int i = rng() % 5; i > 0; i-- ){
+                    graph = _new_graph_of_size(rng() % nb_sizes);
+                    queue.push_initial(graph);
+                    legacy.push_initial(graph);
+                }
+                for( int op = 0; op < 500 && same; op++ ){
+                    unsigned int r = rng() % 100;
+                    if( r < 30 ){
+                        // Pop (one try)
+                        if( legacy.graphs.empty() ){
+                            same = queue.empty();
+                            continue;
+                        }
+                        graph = legacy.pop();
+                        same = (queue.pop() == graph);
+                        if( same )
+                            delete graph;
+                        if( budget > 0 )
+                            budget--;
+                    }else if( r < 33 ){
+                        // Initial graph, at any time
+                        graph = _new_graph_of_size(rng() % nb_sizes);
+                        queue.push_initial(graph);
+                        legacy.push_initial(graph);
+                    }else{
+                        // Rule-derived graph, capped by the remaining budget
+                        graph = _new_graph_of_size(rng() % nb_sizes);
+                        bool queued = legacy.push(graph, budget);
+                        same = (queue.push(graph, budget) == queued);
+                        if( same && !queued )
+                            delete graph;
+                    }
+                    same = same && (queue.size() == legacy.graphs.size());
+                }
+                // Drain both
+                while( same && !legacy.graphs.empty() ){
+                    graph = legacy.pop();
+                    same = (queue.pop() == graph);
+                    if( same )
+                        delete graph;
+                }
+                same = same && queue.empty();
+                nb += _assert(same, QuickFmt() << "StrategyQueue differs from the legacy vector in round " << round >> QuickFmt::to_str);
+            }
+            return nb;
         }
 
         unsigned int direct_match(){
@@ -412,7 +574,9 @@ void test_compiler(){
     string bold = "\033[1m";
     
     // Start testing 
-    cout << bold << "[" << green << "+" << def << bold << "]" << def << std::left << std::setw(34) << " Testing ROP compiler... " << std::flush;  
+    cout << bold << "[" << green << "+" << def << bold << "]" << def << std::left << std::setw(34) << " Testing ROP compiler... " << std::flush;
+    total += strategy_queue_order();
+    total += strategy_queue_equivalence();
     total += direct_match();
     total += indirect_match();
     total += function_call_x86();

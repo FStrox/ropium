@@ -336,7 +336,7 @@ void Node::apply_assertion(){
 /* ===============  Strategy Graphs ============== */
 /* =============================================== */
 
-StrategyGraph::StrategyGraph(): has_gadget_selection(false), _depth(-1){};
+StrategyGraph::StrategyGraph(): has_gadget_selection(false), _depth(-1), size(0){};
 
 void StrategyGraph::update_size(){
     size = 0;
