@@ -7,6 +7,7 @@
 #include <sstream>
 #include <iomanip>
 #include <random>
+#include <chrono>
 
 using std::cout;
 using std::endl;
@@ -189,6 +190,98 @@ namespace test{
                 same = same && queue.empty();
                 nb += _assert(same, QuickFmt() << "StrategyQueue differs from the legacy vector in round " << round >> QuickFmt::to_str);
             }
+            return nb;
+        }
+
+        void _wait_ms(int ms){
+            auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+            while( std::chrono::steady_clock::now() < until ){}
+        }
+
+        unsigned int search_deadline(){
+            unsigned int nb = 0;
+            bool seen = false;
+
+            set_search_deadline(0);
+            nb += _assert(!is_search_deadline_reached() && !poll_search_deadline(), "Search deadline: 0 should mean no deadline");
+
+            set_search_deadline(60000);
+            nb += _assert(!is_search_deadline_reached(), "Search deadline: reached too early");
+
+            set_search_deadline(1);
+            _wait_ms(5);
+            nb += _assert(!search_deadline_was_reached(), "Search deadline: reported reached before any check");
+            nb += _assert(is_search_deadline_reached(), "Search deadline: not reached after it expired");
+            nb += _assert(search_deadline_was_reached() && poll_search_deadline(), "Search deadline: should stay reached");
+            unset_search_deadline();
+            nb += _assert(!search_deadline_was_reached() && !is_search_deadline_reached(), "Search deadline: unset should clear it");
+
+            // The throttled poll reads the clock eventually
+            set_search_deadline(1);
+            _wait_ms(5);
+            for( int i = 0; i < 100000 && !seen; i++ ){
+                seen = poll_search_deadline();
+            }
+            nb += _assert(seen, "Search deadline: poll never saw the deadline");
+            unset_search_deadline();
+
+            return nb;
+        }
+
+        unsigned int search_limits(){
+            unsigned int nb = 0;
+            ArchX86 arch;
+            GadgetDB db;
+            ROPCompiler comp = ROPCompiler(&arch, &db);
+            ROPChain* ropchain;
+            vector<RawGadget> raw;
+            vector<StrategyGraph*> graphs;
+            string query;
+
+            raw.push_back(RawGadget(string("\x89\xf9\xc3", 3), 1)); // mov ecx, edi; ret
+            raw.push_back(RawGadget(string("\x89\xC8\xC3", 3), 2)); // mov eax, ecx; ret
+            db.analyse_raw_gadgets(raw, &arch);
+
+            // 'eax = edi' needs a rule-derived strategy, i.e. a second try
+            nb += _assert(comp.max_tries == DEFAULT_MAX_TRIES, "ROPCompiler: wrong default max_tries");
+            nb += _assert(comp.timeout_ms == 0, "ROPCompiler: there should be no timeout by default");
+            ropchain = comp.compile("eax = edi");
+            nb += _assert_ropchain(ropchain, "Couldn't find chain with the default max_tries");
+            comp.max_tries = 1;
+            ropchain = comp.compile("eax = edi");
+            nb += _assert_no_ropchain(ropchain, "max_tries = 1 should only try the direct strategy");
+            nb += _assert(!comp.last_compile_timed_out, "ROPCompiler: no timeout, should not report a time out");
+            comp.max_tries = DEFAULT_MAX_TRIES;
+
+            // A timeout that is not reached changes nothing, and "no chain" is not a time out
+            comp.timeout_ms = 60000;
+            ropchain = comp.compile("eax = edi");
+            nb += _assert_ropchain(ropchain, "Couldn't find chain with a 60 s timeout");
+            nb += _assert(!comp.last_compile_timed_out, "ROPCompiler: found a chain, should not report a time out");
+            ropchain = comp.compile("eax = esi");
+            nb += _assert_no_ropchain(ropchain, "Found a chain for an unsatisfiable query");
+            nb += _assert(!comp.last_compile_timed_out, "ROPCompiler: search completed, should not report a time out");
+            comp.timeout_ms = 0;
+
+            // An expired deadline stops the gadget selection and the task loop
+            query = "eax = edi";
+            vector<ILInstruction> instr = comp.parse(query);
+            comp.il_to_strategy(graphs, instr[0]);
+            set_search_deadline(1);
+            _wait_ms(5);
+            // Let a check see it: the DFS only reads the clock every few hundred polls
+            is_search_deadline_reached();
+            nb += _assert(!graphs[0]->select_gadgets(db, nullptr, &arch), "Gadget selection ignored the search deadline");
+            CompilerTask task(&arch);
+            task.add_initial_strategy(graphs[0]);
+            nb += _assert_no_ropchain(task.compile(&arch, &db), "CompilerTask ignored the search deadline");
+            unset_search_deadline();
+            graphs.clear();
+            comp.il_to_strategy(graphs, instr[0]);
+            task.clear();
+            task.add_initial_strategy(graphs[0]);
+            nb += _assert_ropchain(task.compile(&arch, &db), "CompilerTask: couldn't find chain without deadline");
+
             return nb;
         }
 
@@ -577,6 +670,8 @@ void test_compiler(){
     cout << bold << "[" << green << "+" << def << bold << "]" << def << std::left << std::setw(34) << " Testing ROP compiler... " << std::flush;
     total += strategy_queue_order();
     total += strategy_queue_equivalence();
+    total += search_deadline();
+    total += search_limits();
     total += direct_match();
     total += indirect_match();
     total += function_call_x86();

@@ -100,6 +100,21 @@ rop.abi = ABI.X86_CDECL
 rop.os = OS.LINUX
 ```
 
+Bound the search time. When no chain exists, the search can run for minutes on
+large gadget sets:
+```Python
+# Stop a compile() call after 5 seconds (None, the default, means no limit)
+rop.timeout = 5
+
+chain = rop.compile('eax = ebx + ecx')
+if chain is None and rop.timed_out:
+    print("Gave up after 5 s: a chain may exist, try a larger timeout")
+
+# Number of chaining strategies tried for each instruction or register to set
+# (3000 by default). Lower values give up sooner but may miss chains.
+rop.max_tries = 3000
+```
+
 # How it works
 
 ROPium is a **ROP-chain compiler**: you describe *what* you want a chain to achieve with a semantic query
@@ -148,10 +163,11 @@ ropium
 (ropium)> load -a X86 ./samples/binaries/efssetup.exe   # extract gadgets from a binary (uses ROPgadget)
 (ropium)> badbytes set 0x0a 0x00                        # avoid these bytes in the chain
 (ropium)> keepregs set esi                              # don't clobber esi
+(ropium)> timeout set 5                                 # give up a search after 5 s
 (ropium)> find eax = 0x1234                             # compile a semantic query
 ```
 
-Main commands: `load`, `load_rp`, `find`, `badbytes`, `keepregs`, `safemem`, `abi`, `os`, `help`, `exit`.
+Main commands: `load`, `load_rp`, `find`, `badbytes`, `keepregs`, `safemem`, `abi`, `os`, `timeout`, `maxtries`, `help`, `exit`.
 
 ## Python API
 
@@ -167,8 +183,9 @@ rop.keep_regs = ["eax"]
 rop.safe_mem = True
 rop.abi = ABI.X86_STDCALL
 rop.os = OS.WINDOWS
+rop.timeout = 5                               # seconds per compile(), None = no limit
 
-chain = rop.compile('eax = 0x1234')
+chain = rop.compile('eax = 0x1234')           # None if no chain (rop.timed_out tells if it gave up)
 print(chain.dump())          # pretty
 print(chain.dump('python')) # struct.pack snippet
 print(chain.dump('raw'))    # raw bytes for your payload

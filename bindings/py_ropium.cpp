@@ -1,6 +1,8 @@
 #include "python_bindings.hpp"
 #include <cstdio>
 #include <fstream>
+#include <climits>
+#include <cmath>
 
 /* -------------------------------------
  *          ROPium object
@@ -329,6 +331,83 @@ static int ROPium_set_os(PyObject* self, PyObject* val, void* closure){
     return 0;
 }
 
+static PyObject* ROPium_get_max_tries(PyObject* self, void* closure){
+    return PyLong_FromLong(as_ropium_object(self).compiler->max_tries);
+}
+
+static int ROPium_set_max_tries(PyObject* self, PyObject* val, void* closure){
+    long max_tries;
+
+    if( val == NULL ){
+        PyErr_SetString(PyExc_TypeError, "Cannot delete the max_tries attribute");
+        return -1;
+    }
+    if( ! PyLong_Check(val) || PyBool_Check(val) ){
+        PyErr_SetString(PyExc_TypeError, "max_tries must be an integer");
+        return -1;
+    }
+    max_tries = PyLong_AsLong(val);
+    if( max_tries == -1 && PyErr_Occurred() ){
+        return -1;
+    }
+    if( max_tries < 1 || max_tries > INT_MAX ){
+        PyErr_Format(PyExc_ValueError, "max_tries must be between 1 and %d", INT_MAX);
+        return -1;
+    }
+
+    as_ropium_object(self).compiler->max_tries = (int)max_tries;
+    return 0;
+}
+
+static PyObject* ROPium_get_timeout(PyObject* self, void* closure){
+    unsigned int timeout_ms = as_ropium_object(self).compiler->timeout_ms;
+
+    if( timeout_ms == 0 )
+        Py_RETURN_NONE;
+    return PyFloat_FromDouble(timeout_ms / 1000.0);
+}
+
+static int ROPium_set_timeout(PyObject* self, PyObject* val, void* closure){
+    double seconds, timeout_ms;
+
+    if( val == NULL ){
+        PyErr_SetString(PyExc_TypeError, "Cannot delete the timeout attribute");
+        return -1;
+    }
+    if( val == Py_None ){
+        as_ropium_object(self).compiler->timeout_ms = 0;
+        return 0;
+    }
+    if( PyBool_Check(val) || !(PyLong_Check(val) || PyFloat_Check(val)) ){
+        PyErr_SetString(PyExc_TypeError, "timeout must be a number of seconds or None");
+        return -1;
+    }
+    seconds = PyFloat_AsDouble(val);
+    if( seconds == -1.0 && PyErr_Occurred() ){
+        return -1;
+    }
+    if( !std::isfinite(seconds) || seconds < 0 ){
+        PyErr_SetString(PyExc_ValueError, "timeout must be a finite number of seconds >= 0 (or None)");
+        return -1;
+    }
+    // Round up so that a small positive timeout doesn't become 0 (no limit)
+    timeout_ms = std::ceil(seconds * 1000);
+    if( timeout_ms > UINT_MAX ){
+        PyErr_Format(PyExc_ValueError, "timeout must be at most %u seconds", UINT_MAX / 1000);
+        return -1;
+    }
+
+    as_ropium_object(self).compiler->timeout_ms = (unsigned int)timeout_ms;
+    return 0;
+}
+
+static PyObject* ROPium_get_timed_out(PyObject* self, void* closure){
+    if( as_ropium_object(self).compiler->last_compile_timed_out )
+        Py_RETURN_TRUE;
+    else
+        Py_RETURN_FALSE;
+}
+
 
 static PyGetSetDef ROPium_getset[] = {
     {"bad_bytes", ROPium_get_bad_bytes, ROPium_set_bad_bytes, "Bad bytes that must not occur in the ropchains", NULL},
@@ -337,6 +416,9 @@ static PyGetSetDef ROPium_getset[] = {
     {"arch", ROPium_get_arch, NULL, "Architecture type", NULL},
     {"abi", ROPium_get_abi, ROPium_set_abi, "ABI to use when calling functions", NULL},
     {"os", ROPium_get_os, ROPium_set_os, "OS to target when doing syscalls", NULL},
+    {"max_tries", ROPium_get_max_tries, ROPium_set_max_tries, "Maximum number of chaining strategies tried for each instruction or register to set (default: 3000)", NULL},
+    {"timeout", ROPium_get_timeout, ROPium_set_timeout, "Time limit in seconds for one compile() call, or None for no limit (default: None)", NULL},
+    {"timed_out", ROPium_get_timed_out, NULL, "True if the last compile() returned None because it reached the timeout", NULL},
     {NULL}
 };
 

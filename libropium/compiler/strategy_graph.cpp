@@ -851,8 +851,8 @@ bool StrategyGraph::select_gadgets(GadgetDB& db, Constraint* constraint, Arch* a
         throw runtime_exception("StrategyGraph::select_gadget(): should NEVER be called with a non-NULL constraint and a NULL arch");
     }
 
-    // Check if SIGINT
-    if( is_pending_sigint()){
+    // Check if SIGINT or search deadline reached
+    if( is_pending_sigint() || poll_search_deadline() ){
         return false;
     }
 
@@ -892,6 +892,9 @@ bool StrategyGraph::select_gadgets(GadgetDB& db, Constraint* constraint, Arch* a
         const int nb = node.nb_params();
         // 2.a. Try all possible params
         for( const auto& pos: possible->gadgets ){
+            // A single DFS level can take seconds on large DBs
+            if( poll_search_deadline() )
+                break;
             // Update free params
             for( int p = 0; p < nb; p++){
                 if( node.params[p].is_free())
@@ -913,6 +916,8 @@ bool StrategyGraph::select_gadgets(GadgetDB& db, Constraint* constraint, Arch* a
 
             // 2.b Try all possible gadgets
             for( Gadget* gadget : *(pos.second) ){
+                if( poll_search_deadline() )
+                    break;
                 if( ! node.assign_gadget(gadget, arch, constraint))
                     continue;
 
@@ -942,6 +947,8 @@ bool StrategyGraph::select_gadgets(GadgetDB& db, Constraint* constraint, Arch* a
 
             // 2. Try all possible gadgets (or a subset)
             for( Gadget* gadget : gadgets ){
+                if( poll_search_deadline() )
+                    break;
                 if( ! node.assign_gadget(gadget, arch, constraint))
                     continue;
 

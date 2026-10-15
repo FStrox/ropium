@@ -81,7 +81,6 @@ void CompilerTask::add_strategy(StrategyGraph* graph, int max_tries){
 ROPChain* CompilerTask::compile(Arch* arch, GadgetDB* db, Constraint* constraint, int nb_tries){
     StrategyGraph* graph;
     ROPChain* res = nullptr;
-    nb_tries = 3000;
 
     // Set sigint handler to catch Ctrl+C
     set_sigint_handler();
@@ -92,6 +91,10 @@ ROPChain* CompilerTask::compile(Arch* arch, GadgetDB* db, Constraint* constraint
             notify_sigint_handled();
             unset_signint_handler();
             return nullptr;
+        }
+        // Stop when the search deadline is reached
+        if( is_search_deadline_reached() ){
+            break;
         }
 
         graph = pending_strategies.pop();
@@ -167,7 +170,8 @@ CompilerTask::~CompilerTask(){
 
 
 /* ============= ROPCompiler ============= */
-ROPCompiler::ROPCompiler(Arch* a, GadgetDB *d):arch(a), db(d){}
+ROPCompiler::ROPCompiler(Arch* a, GadgetDB *d):arch(a), db(d), max_tries(DEFAULT_MAX_TRIES),
+    timeout_ms(0), last_compile_timed_out(false){}
 
 bool ROPCompiler::is_complex_instr(ILInstruction& instr, ABI abi){
     if( instr.type == ILInstructionType::SYSCALL )
@@ -181,6 +185,18 @@ bool ROPCompiler::is_complex_instr(ILInstruction& instr, ABI abi){
 }
 
 ROPChain* ROPCompiler::compile(string program, Constraint* constraint, ABI abi, System system){
+    ROPChain* res;
+    // One deadline for the whole program: all the searches it starts (one per
+    // instruction, register permutations, the syscall gadget) share it
+    SearchDeadlineScope deadline(timeout_ms);
+
+    last_compile_timed_out = false;
+    res = _compile(program, constraint, abi, system);
+    last_compile_timed_out = (res == nullptr) && search_deadline_was_reached();
+    return res;
+}
+
+ROPChain* ROPCompiler::_compile(string program, Constraint* constraint, ABI abi, System system){
     Constraint* tmp_constraint;
     ROPChain* res;
     vector<ILInstruction> final_instr;
@@ -226,7 +242,7 @@ ROPChain* ROPCompiler::process_simple(vector<ILInstruction>& ins, Constraint* co
         for( StrategyGraph* graph : graphs ){
             task.add_initial_strategy(graph);
         }
-        if( (tmp = task.compile(arch, db, constraint)) != nullptr){
+        if( (tmp = task.compile(arch, db, constraint, max_tries)) != nullptr){
             if( !res )
                 res = tmp;
             else{
@@ -374,7 +390,7 @@ ROPChain* ROPCompiler::_set_registers_permutation( vector<ILInstruction>& instr,
                 tmp_keep_regs.push_back(instr[j].args[PARAM_MOVREG_SRC_REG]);
             }
         }
-        chain = task.compile(arch, db, &tmp_constr);
+        chain = task.compile(arch, db, &tmp_constr, max_tries);
         if( chain == nullptr ){
             if( i == 0 && tmp_keep_regs.empty()){
                 // No chain to set he first register
@@ -415,6 +431,10 @@ ROPChain* ROPCompiler::_set_multiple_registers(vector<ILInstruction>& instr, Con
         order.push_back(i);
 
     do{
+        // Don't start other permutations once the search deadline is reached
+        if( is_search_deadline_reached() ){
+            break;
+        }
         if( !_is_failed_permutation(failed_permutations, order)){
             res = _set_registers_permutation(instr, order, constraint, failed_permutations, failed_on_first);
             if( res ){
@@ -646,7 +666,7 @@ ROPChain* ROPCompiler::_compile_x64_system_v_call(ILInstruction& instr, Constrai
     // Get the chain that calls the function
     task.clear();
     task.add_initial_strategy(graph);
-    tmp = task.compile(arch, db, &call_constr);
+    tmp = task.compile(arch, db, &call_constr, max_tries);
 
     if( !tmp ){
         delete res;
@@ -755,7 +775,7 @@ ROPChain* ROPCompiler::_compile_x64_ms_call(ILInstruction& instr, Constraint* co
     // Get the chain that calls the function
     task.clear();
     task.add_initial_strategy(graph);
-    tmp = task.compile(arch, db, &call_constr);
+    tmp = task.compile(arch, db, &call_constr, max_tries);
 
     if( !tmp ){
         delete res;
@@ -824,7 +844,7 @@ ROPChain* ROPCompiler::_compile_x86_linux_syscall(ILInstruction& instr, Constrai
     }
 
     // Get the chain to make the syscall
-    syscall_chain = compile("syscall", &syscall_constraint);
+    syscall_chain = _compile("syscall", &syscall_constraint, ABI::NONE, System::NONE);
     if( ! syscall_chain ){
         delete res;
         return nullptr;
@@ -891,7 +911,7 @@ ROPChain* ROPCompiler::_compile_x64_linux_syscall(ILInstruction& instr, Constrai
     }
 
     // Get the chain to make the syscall
-    syscall_chain = compile("syscall", &syscall_constraint);
+    syscall_chain = _compile("syscall", &syscall_constraint, ABI::NONE, System::NONE);
     if( ! syscall_chain ){
         delete res;
         return nullptr;

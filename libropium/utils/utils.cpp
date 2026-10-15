@@ -15,6 +15,7 @@
 #include <locale>
 #include <iomanip>
 #include <cstring>
+#include <chrono>
 
 using std::ifstream;
 using std::ofstream;
@@ -290,4 +291,48 @@ bool is_pending_sigint(){
 
 void notify_sigint_handled(){
     g_ropium_sigint_flag = false;
+}
+
+/* ========= Search deadline ============= */
+// Between two clock reads, poll_search_deadline() is called by DFS loop
+// iterations that take about a microsecond each
+#define SEARCH_DEADLINE_POLL_PERIOD 256
+
+static bool g_search_deadline_set = false;
+static bool g_search_deadline_reached = false;
+static unsigned int g_search_deadline_polls = 0;
+static std::chrono::steady_clock::time_point g_search_deadline;
+
+void set_search_deadline(unsigned int timeout_ms){
+    g_search_deadline_set = (timeout_ms != 0);
+    g_search_deadline_reached = false;
+    g_search_deadline_polls = 0;
+    if( g_search_deadline_set ){
+        g_search_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    }
+}
+
+void unset_search_deadline(){
+    set_search_deadline(0);
+}
+
+bool is_search_deadline_reached(){
+    if( g_search_deadline_set && !g_search_deadline_reached ){
+        g_search_deadline_reached = (std::chrono::steady_clock::now() >= g_search_deadline);
+    }
+    return g_search_deadline_reached;
+}
+
+bool poll_search_deadline(){
+    if( !g_search_deadline_set ){
+        return false;
+    }
+    if( !g_search_deadline_reached && ++g_search_deadline_polls % SEARCH_DEADLINE_POLL_PERIOD != 0 ){
+        return false;
+    }
+    return is_search_deadline_reached();
+}
+
+bool search_deadline_was_reached(){
+    return g_search_deadline_reached;
 }

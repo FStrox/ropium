@@ -10,6 +10,8 @@
 
 using std::list;
 
+// Default number of strategy graphs that one CompilerTask tries
+const int DEFAULT_MAX_TRIES = 3000;
 
 enum class ABI{
     /* X86 */
@@ -93,7 +95,7 @@ public:
     // Add a graph translated from the IL (the task takes ownership)
     void add_initial_strategy(StrategyGraph* graph);
     void add_strategy(StrategyGraph* graph, int max_tries);
-    ROPChain* compile(Arch* arch, GadgetDB* db, Constraint* constraint=nullptr, int nb_tries=3000);
+    ROPChain* compile(Arch* arch, GadgetDB* db, Constraint* constraint=nullptr, int nb_tries=DEFAULT_MAX_TRIES);
     void clear();
     ~CompilerTask();
 };
@@ -112,9 +114,16 @@ class ROPCompiler{
     ROPChain* _set_registers_permutation( vector<ILInstruction>& instr, vector<int>& permutation,
         Constraint* constraint, list<vector<int>>& failed_perms, bool& failed_on_first);
     bool is_complex_instr(ILInstruction& instr, ABI abi);
+    // compile() without starting a new search deadline (for nested compilations)
+    ROPChain* _compile(string program, Constraint* constraint, ABI abi, System sys);
 public:
     Arch* arch;
     GadgetDB* db;
+    // Search limits. They are members rather than compile() arguments so
+    // that every search started by a compile() call uses them
+    int max_tries; // Strategy graphs tried per search (CompilerTask), one search per instruction or register to set
+    unsigned int timeout_ms; // Wall-clock limit for a whole compile() call, 0 = no limit
+    bool last_compile_timed_out; // The last compile() returned nullptr because it reached timeout_ms
 
     // Translate function calls into strategy graphs
     bool _x86_cdecl_to_strategy(StrategyGraph& graph, ILInstruction& instr);
