@@ -4,6 +4,7 @@
 #include <cstring>
 #include "murmur3.h"
 #include <algorithm>
+#include <atomic>
 #include <iostream>
 #include <sstream>
 
@@ -63,7 +64,7 @@ hash_t exprhash(void* hash_in, int len, uint32_t seed){
 /* Implementation of expression classes */ 
 // ==================================
 ExprObject::ExprObject(ExprType t, exprsize_t s, bool _is_simp): type(t), size(s), _hashed(false), _hash(0), 
-    _simplified_expr(nullptr), _is_simplified(_is_simp), _concrete_ctx_id(-1){}
+    _simplified_expr(nullptr), _is_simplified(_is_simp), _concrete_ctx_id(VARCTX_ID_NONE){}
 bool ExprObject::is_cst(){return type == ExprType::CST;}
 bool ExprObject::is_var(){return type == ExprType::VAR;}
 bool ExprObject::is_mem(){return type == ExprType::MEM;}
@@ -184,11 +185,11 @@ cst_t ExprVar::concretize(VarContext* ctx){
     if( ctx == nullptr){
         throw expression_exception("Cannot concretize symbolic variable without supplying a context");
     }
-    if( _concrete_ctx_id == ctx->id )
+    if( _concrete_ctx_id == ctx->id() )
         return _concrete;
     else{
         _concrete = ctx->get(_name);
-        _concrete_ctx_id = ctx->id; 
+        _concrete_ctx_id = ctx->id(); 
     }
     return _concrete; 
 }
@@ -248,7 +249,7 @@ bool ExprUnop::is_unop(Op op){
 }
 
 cst_t ExprUnop::concretize(VarContext* ctx){
-    if( ctx != nullptr && _concrete_ctx_id == ctx->id )
+    if( ctx != nullptr && _concrete_ctx_id == ctx->id() )
         return _concrete;
     else{
         switch(_op){
@@ -257,7 +258,7 @@ cst_t ExprUnop::concretize(VarContext* ctx){
             default: throw runtime_exception("Missing case in ExprUnop::concretize()");
         }
         if( ctx != nullptr ){
-            _concrete_ctx_id = ctx->id; 
+            _concrete_ctx_id = ctx->id(); 
         }
         _concrete = cst_sign_extend(size, _concrete);
     }
@@ -334,7 +335,7 @@ bool ExprBinop::is_binop(Op op){
 }
 
 cst_t ExprBinop::concretize(VarContext* ctx){
-    if( ctx != nullptr && _concrete_ctx_id == ctx->id )
+    if( ctx != nullptr && _concrete_ctx_id == ctx->id() )
         return _concrete;
     else{
         switch(_op){
@@ -368,7 +369,7 @@ cst_t ExprBinop::concretize(VarContext* ctx){
             default: throw runtime_exception("Missing case in ExprBinop::concretize()");
         }
         if( ctx != nullptr ){
-            _concrete_ctx_id = ctx->id;
+            _concrete_ctx_id = ctx->id();
         }
         _concrete =cst_sign_extend(size, _concrete);
     }
@@ -417,7 +418,7 @@ void ExprExtract::print(ostream& os){
 cst_t ExprExtract::concretize(VarContext* ctx){
     cst_t high, low;
     ucst_t mask;
-    if( ctx != nullptr && _concrete_ctx_id == ctx->id )
+    if( ctx != nullptr && _concrete_ctx_id == ctx->id() )
         return _concrete;
     else{
         high = args[1]->concretize(ctx);
@@ -430,7 +431,7 @@ cst_t ExprExtract::concretize(VarContext* ctx){
         
         _concrete =  ((ucst_t)args[0]->concretize(ctx) & mask) >> (ucst_t)low;
         if( ctx != nullptr )
-            _concrete_ctx_id = ctx->id; 
+            _concrete_ctx_id = ctx->id(); 
         _concrete = cst_sign_extend(size, _concrete);
     }
     return _concrete; 
@@ -465,7 +466,7 @@ void ExprConcat::print(ostream& os){
 
 cst_t ExprConcat::concretize(VarContext* ctx){
     cst_t upper, lower; 
-    if( ctx != nullptr && _concrete_ctx_id == ctx->id )
+    if( ctx != nullptr && _concrete_ctx_id == ctx->id() )
         return _concrete;
     else{
         upper = args[0]->concretize(ctx);
@@ -473,7 +474,7 @@ cst_t ExprConcat::concretize(VarContext* ctx){
         _concrete = cst_sign_extend(size, (((ucst_t)upper)<<(ucst_t)args[1]->size)
                                              | (ucst_t)cst_sign_trunc(args[1]->size, lower));
         if( ctx != nullptr )
-            _concrete_ctx_id = ctx->id; 
+            _concrete_ctx_id = ctx->id(); 
          _concrete =cst_sign_extend(size, _concrete);
     }
    
@@ -517,12 +518,12 @@ void ExprBisz::print(ostream& out){
 }
 
 cst_t ExprBisz::concretize(VarContext* ctx){
-    if( ctx != nullptr && _concrete_ctx_id == ctx->id )
+    if( ctx != nullptr && _concrete_ctx_id == ctx->id() )
         return _concrete;
     else{
         _concrete = (args[0]->concretize(ctx) == 0)? _mode : _mode^1;
         if( ctx != nullptr )
-            _concrete_ctx_id = ctx->id;
+            _concrete_ctx_id = ctx->id();
         _concrete =cst_sign_extend(size, _concrete);
     }
     
@@ -1009,29 +1010,47 @@ cst_t cst_sign_extend(exprsize_t size, cst_t c){
 }
 
 /* ====================================== */
-VarContext::VarContext(int i): id(i){}
+// Process-wide so that two contexts never share an id (see VarContext in
+// expression.hpp). 64 bits cannot wrap during a search. Relaxed ordering is
+// enough: only the uniqueness of the returned values matters.
+static std::atomic<varctx_id_t> next_varctx_id(VARCTX_ID_NONE + 1);
+
+static varctx_id_t new_varctx_id(){
+    return next_varctx_id.fetch_add(1, std::memory_order_relaxed);
+}
+
+VarContext::VarContext(): _id(new_varctx_id()){}
 
 void VarContext::set(const string& name, cst_t value){
-    varmap[name] = value;
-    id++;
+    auto it = varmap.find(name);
+    if( it == varmap.end() ){
+        varmap.emplace(name, value);
+    }else if( it->second != value ){
+        it->second = value;
+    }else{
+        return; // Same value, cached concretizations are still valid
+    }
+    _id = new_varctx_id();
 }
 
 cst_t VarContext::get(const string& name){
-    map<string, cst_t>::iterator it; 
-    if( ( it = varmap.find(name)) == varmap.end())
-        throw expression_exception(QuickFmt() << "Trying to access variable '" 
+    auto it = varmap.find(name);
+    if( it == varmap.end())
+        throw expression_exception(QuickFmt() << "Trying to access variable '"
             << name << "' which is unknown in context" >> QuickFmt::to_str);
     return it->second;
 }
 
 void VarContext::remove(const string& name){
-    varmap.erase(name);
-    id++;
+    if( varmap.erase(name) > 0 )
+        _id = new_varctx_id();
 }
 
 void VarContext::print(ostream& os ){
+    // Sort by name so that the output does not depend on hashing
+    map<string, cst_t> sorted(varmap.begin(), varmap.end());
     os << std::endl;
-    for( auto var : varmap ){
+    for( auto& var : sorted ){
         os << var.first << " : " << std::hex << "0x" << var.second << std::dec << std::endl;
     }
 }

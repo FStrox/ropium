@@ -7,6 +7,7 @@
 #include <memory>
 #include <ostream>
 #include <map>
+#include <unordered_map>
 #include "exception.hpp"
 
 using std::string;
@@ -14,6 +15,7 @@ using std::vector;
 using std::shared_ptr;
 using std::ostream;
 using std::map;
+using std::unordered_map;
 
 /* Type aliasing */
 typedef uint16_t exprsize_t ;
@@ -21,6 +23,10 @@ typedef uint32_t hash_t;
 typedef int64_t cst_t;
 typedef uint64_t ucst_t;
 typedef ucst_t addr_t;
+typedef uint64_t varctx_id_t;
+
+// Never used as a VarContext id, means "no cached concretization"
+const varctx_id_t VARCTX_ID_NONE = 0;
 
 /* Types of expressions
    ====================
@@ -104,7 +110,7 @@ protected:
     hash_t _hash;
     // Concrete
     cst_t _concrete;
-    int _concrete_ctx_id;
+    varctx_id_t _concrete_ctx_id;
     // Simplification
     Expr _simplified_expr;
     bool _is_simplified;
@@ -370,12 +376,22 @@ cst_t cst_sign_extend(exprsize_t size, cst_t val);
 /* VarContext
    ==========
 A VarContext associates a list of concrete values to a list of variables.
-It used with the variables names as keys for lookup. */
+It used with the variables names as keys for lookup.
+
+Expressions cache their concrete value together with the id() of the
+context it was computed in. Ids are unique in the whole process: a new id
+is drawn from a global counter when a context is created and each time a
+variable is added, removed, or changes value. Equal ids therefore always
+mean equal variable values, even across different contexts. Setting a
+variable to the value it already has keeps the id so that cached
+concretizations stay valid. A copied context keeps the id of the original
+until one of them is modified. */
 class VarContext{
-    map<string, cst_t> varmap;
+    unordered_map<string, cst_t> varmap;
+    varctx_id_t _id;
 public:
-    int id;
-    VarContext(int id=0);
+    VarContext();
+    varctx_id_t id() const { return _id; }
     void set(const string& name, cst_t value);
     cst_t get(const string& name);
     void remove(const string& name);

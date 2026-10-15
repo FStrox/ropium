@@ -145,8 +145,8 @@ namespace test{
         /* Concretization */
         unsigned int concretization(){
             unsigned int nb = 0; 
-            VarContext ctx = VarContext(0);
-            VarContext ctx2 = VarContext(1);
+            VarContext ctx;
+            VarContext ctx2;
             Expr    v1 = exprvar(32, "var1" ),
                     v2 = exprvar(32, "var2"),
                     v3 = exprvar(64, "var3"),
@@ -230,7 +230,7 @@ namespace test{
         
         unsigned int change_varctx(){
             unsigned int nb = 0; 
-            VarContext ctx = VarContext(0);
+            VarContext ctx;
             Expr    v1 = exprvar(32, "var1" ),
                     v2 = exprvar(32, "var2"),
                     v3 = exprvar(64, "var3"),
@@ -259,9 +259,63 @@ namespace test{
             ctx.set("var2", -3);
             ctx.set("var4", 0xffff000000000000);
             
-            nb += _assert( e1->concretize(&ctx) == exprcst(32, 7)->concretize(&ctx), "Concretization gave wrong result"); 
+            nb += _assert( e1->concretize(&ctx) == exprcst(32, 7)->concretize(&ctx), "Concretization gave wrong result");
             nb += _assert( e2->concretize(&ctx) == exprcst(64, 0xffff000000000000)->concretize(&ctx), "Concretization gave wrong result");
-            
+
+            return nb;
+        }
+
+        unsigned int varctx_id(){
+            unsigned int nb = 0;
+            VarContext ctx, ctx2;
+            varctx_id_t id;
+
+            nb += _assert( ctx.id() != VARCTX_ID_NONE, "New context has the reserved id");
+            nb += _assert( ctx.id() != ctx2.id(), "Two new contexts have the same id");
+
+            id = ctx.id();
+            ctx.set("var1", 1);
+            nb += _assert( ctx.id() != id, "Adding a variable kept the id");
+            id = ctx.id();
+            ctx.set("var1", 1);
+            nb += _assert( ctx.id() == id, "Setting a variable to its current value changed the id");
+            ctx.set("var1", 2);
+            nb += _assert( ctx.id() != id, "Changing a variable kept the id");
+            id = ctx.id();
+            ctx.remove("unknown");
+            nb += _assert( ctx.id() == id, "Removing an unknown variable changed the id");
+            ctx.remove("var1");
+            nb += _assert( ctx.id() != id, "Removing a variable kept the id");
+
+            // A copy shares the id until one of the contexts changes
+            ctx.set("var1", 3);
+            VarContext copy = ctx;
+            nb += _assert( copy.id() == ctx.id(), "Copied context has a different id");
+            copy.set("var1", 4);
+            nb += _assert( copy.id() != ctx.id(), "Modified copy kept the id of the original");
+            return nb;
+        }
+
+        // An expression shared between contexts must never return a value
+        // cached under another context, even when both contexts went through
+        // the same sequence of operations
+        unsigned int shared_expr_varctx(){
+            unsigned int nb = 0;
+            Expr    v1 = exprvar(32, "var1"),
+                    e1 = v1 + exprcst(32, 1);
+            VarContext ctx;
+            ctx.set("var1", 1);
+            nb += _assert( e1->concretize(&ctx) == 2, "Concretization gave wrong result");
+
+            VarContext ctx2;
+            ctx2.set("var1", 5);
+            nb += _assert( v1->concretize(&ctx2) == 5, "Concretization used a value cached under another context");
+            nb += _assert( e1->concretize(&ctx2) == 6, "Concretization used a value cached under another context");
+
+            // Unchanged contexts keep their cached values valid
+            ctx2.set("var1", 5);
+            nb += _assert( e1->concretize(&ctx2) == 6, "Concretization gave wrong result");
+            nb += _assert( e1->concretize(&ctx) == 2, "Concretization used a value cached under another context");
             return nb;
         }
 
@@ -283,6 +337,8 @@ void test_expression(){
     total += hashing();
     total += concretization();
     total += change_varctx();
+    total += varctx_id();
+    total += shared_expr_varctx();
     // Return res
     cout << "\t" << total << "/" << total << green << "\t\tOK" << def << endl;
 }
