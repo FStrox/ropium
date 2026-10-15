@@ -169,6 +169,91 @@ print(chain.dump('raw'))    # raw bytes for your payload
 
 See `RopChainer.py` for a runnable example.
 
+## Examples: one chain per sample gadget file
+
+The `samples/gadgets/` folder ships pre-generated rp++ dumps you can play with
+out-of-the-box. Here is one verified query for each of them — the same chains
+are obtained from the CLI with `load_rp <file>` then `find <query>`.
+
+### efssetup — move between registers (`ecx = edx`)
+
+ROPium routes the move through `eax` because no single gadget does `ecx <- edx`
+directly:
+
+```python
+from ropium import ROPium, ARCH
+
+rop = ROPium(ARCH.X86)
+rop.load_rp('samples/gadgets/efssetup.txt')
+
+chain = rop.compile('ecx = edx')
+print(chain.dump())
+```
+
+```
+0x004027af (mov eax, edx; ret)
+0x0040509e (mov ecx, eax; lea esi, [ebp - 0x48]; ret)
+```
+
+### mp3_conf — move between registers (`ebx = eax`)
+
+Here the move ends with a `mov ebx, eax; call edi` gadget, so ROPium pre-loads
+`edi`/`esi` with the addresses of harmless `ret` gadgets to survive the `call`:
+
+```python
+rop = ROPium(ARCH.X86)
+rop.load_rp('samples/gadgets/mp3_conf.txt')
+
+chain = rop.compile('ebx = eax')
+print(chain.dump())
+```
+
+```
+0x0040156f (pop edi; ret)
+0x00401552 (pop esi; ret)
+0x0041797d (mov ebx, eax; call edi)
+```
+
+### vulnserver_3 — load a constant (`ebx = 0xdeadbeef`)
+
+The chain pops the constant into `ebx`; the `0xffffffff` entries are padding for
+the extra `pop ebp` in the gadget:
+
+```python
+rop = ROPium(ARCH.X86)
+rop.load_rp('samples/gadgets/vulnserver_3.txt')
+
+chain = rop.compile('ebx = 0xdeadbeef')
+print(chain.dump())
+```
+
+```
+0x00402673 (pop ebx; pop ebp; ret)
+0xdeadbeef
+0xffffffff
+```
+
+### ImageLoad — move between registers (`edx = eax`)
+
+The `xchg` gadget clobbers several registers on its way out, so the chain carries
+four paddings (`0xffffffff`) for the extra `pop`s:
+
+```python
+rop = ROPium(ARCH.X86)
+rop.load_rp('samples/gadgets/ImageLoad.txt')
+
+chain = rop.compile('edx = eax')
+print(chain.dump())
+```
+
+```
+0x10005043 (xchg eax, edx; pop edi; pop esi; pop ebp; pop ebx; ret)
+0xffffffff
+0xffffffff
+0xffffffff
+0xffffffff
+```
+
 ## Query language
 
 ```
