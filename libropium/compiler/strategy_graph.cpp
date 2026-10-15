@@ -46,25 +46,9 @@ bool Node::has_mandatory_following_node(){
     return mandatory_following_node != -1;
 }
 
-int Node::nb_params(){
-    switch( type ){
-        case GadgetType::MOV_REG: return NB_PARAM_MOVREG;
-        case GadgetType::MOV_CST: return NB_PARAM_MOVCST;
-        case GadgetType::AMOV_CST: return NB_PARAM_AMOVCST;
-        case GadgetType::AMOV_REG: return NB_PARAM_AMOVREG;
-        case GadgetType::LOAD: return NB_PARAM_LOAD;
-        case GadgetType::ALOAD: return NB_PARAM_ALOAD;
-        case GadgetType::STORE: return NB_PARAM_STORE;
-        case GadgetType::ASTORE: return NB_PARAM_ASTORE;
-        case GadgetType::SYSCALL: return NB_PARAM_SYSCALL;
-        case GadgetType::INT80: return NB_PARAM_INT80;
-        
-        default: throw runtime_exception("Unsupported gadget type in Node::nb_params()");
-    }
-}
-
 bool Node::has_free_param(){
-    for( int p = 0; p < nb_params(); p++){
+    const int nb = nb_params();
+    for( int p = 0; p < nb; p++){
         if( params[p].is_free() )
             return true;
     }
@@ -681,7 +665,8 @@ void StrategyGraph::_resolve_param(Param& param){
 void StrategyGraph::_resolve_all_params(node_t n){
     Node& node = nodes[n];
     // Resolve normal parameters
-    for( int p = 0; p < node.nb_params(); p++){
+    const int nb = node.nb_params();
+    for( int p = 0; p < nb; p++){
         _resolve_param(node.params[p]);
     }
     // Resolve special paddings
@@ -904,10 +889,11 @@ bool StrategyGraph::select_gadgets(GadgetDB& db, Constraint* constraint, Arch* a
     if( node.has_free_param() ){
         // Get possible gadgets
         PossibleGadgets* possible = _get_possible_gadgets(db, node.id);
+        const int nb = node.nb_params();
         // 2.a. Try all possible params
-        for( auto pos: possible->gadgets ){
+        for( const auto& pos: possible->gadgets ){
             // Update free params
-            for( int p = 0; p < node.nb_params(); p++){
+            for( int p = 0; p < nb; p++){
                 if( node.params[p].is_free())
                     node.params[p].value = pos.first[p];
                 if( node.params[p].is_cst())

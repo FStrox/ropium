@@ -418,6 +418,25 @@ public:
     bool modifies_reg(int reg_num);
 };
 
+// Inline because it is called in the loop headers of the gadget selection
+// hot path
+inline int Node::nb_params(){
+    switch( type ){
+        case GadgetType::MOV_REG: return NB_PARAM_MOVREG;
+        case GadgetType::MOV_CST: return NB_PARAM_MOVCST;
+        case GadgetType::AMOV_CST: return NB_PARAM_AMOVCST;
+        case GadgetType::AMOV_REG: return NB_PARAM_AMOVREG;
+        case GadgetType::LOAD: return NB_PARAM_LOAD;
+        case GadgetType::ALOAD: return NB_PARAM_ALOAD;
+        case GadgetType::STORE: return NB_PARAM_STORE;
+        case GadgetType::ASTORE: return NB_PARAM_ASTORE;
+        case GadgetType::SYSCALL: return NB_PARAM_SYSCALL;
+        case GadgetType::INT80: return NB_PARAM_INT80;
+
+        default: throw runtime_exception("Unsupported gadget type in Node::nb_params()");
+    }
+}
+
 ostream& operator<<(ostream& os, Node& node);
 
 class InterferencePoint {
