@@ -1,15 +1,16 @@
 # Build artifacts
 *.o
-*.so
-*.pyc
-__pycache__/
 *.gch
+bin/
 
-# Binary output
-bin/libropium.so
-bin/ropium.so
-bin/tests
+# Core dumps from crashes
+core.*
 
-# Temporary files
+# Python
+__pycache__/
+*.pyc
+
+# Temporary gadget files created at runtime
 .ropium_raw_gadgets.*
-test_basic.py
+.ropgadget_output.*
+ropium_raw_gadgets.*

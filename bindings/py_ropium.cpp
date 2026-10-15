@@ -1,7 +1,6 @@
 #include "python_bindings.hpp"
 #include <cstdio>
 #include <fstream>
-#include <iostream>
 
 /* -------------------------------------
  *          ROPium object
@@ -17,7 +16,7 @@ static void ROPium_dealloc(PyObject* self){
 
 static PyObject* ROPium_load(PyObject* self, PyObject* args){
     const char* filename;
-    int filename_len;
+    Py_ssize_t filename_len; // "s#" with PY_SSIZE_T_CLEAN expects Py_ssize_t, not int
     int filenum = 0;
     stringstream ss;
     string gadget_file; 
@@ -71,7 +70,7 @@ static PyObject* ROPium_load(PyObject* self, PyObject* args){
 
 static PyObject* ROPium_load_rp(PyObject* self, PyObject* args){
     const char* filename;
-    int filename_len;
+    Py_ssize_t filename_len; // "s#" with PY_SSIZE_T_CLEAN expects Py_ssize_t, not int
     int filenum = 0;
     int nb_success = 0;
     stringstream ss;
@@ -79,21 +78,10 @@ static PyObject* ROPium_load_rp(PyObject* self, PyObject* args){
     string input_file;
     vector<RawGadget>* raw = nullptr;
 
-    if (PyTuple_Check(args)) {
-        Py_ssize_t n = PyTuple_Size(args);
-        for (Py_ssize_t i = 0; i < n; ++i) {
-            PyObject* item = PyTuple_GetItem(args, i);
-            PyObject* str_repr = PyObject_Repr(item);
-            if (str_repr) {
-                const char* s = PyUnicode_AsUTF8(str_repr);
-                if (s) {
-                    std::cout << "Arg " << i << ": " << s << std::endl;
-                    filename = s;
-                    filename_len = strlen(s);
-                }
-                Py_DECREF(str_repr);
-            }
-        }
+    // Parse the filename directly with "s#" (no PyObject_Repr: it returns a new
+    // reference that was freed while still being used -> use-after-free)
+    if( ! PyArg_ParseTuple(args, "s#", &filename, &filename_len) ){
+        return NULL;
     }
     std::string fname(filename, filename_len);
     // Remove leading and trailing single quotes if present
@@ -136,7 +124,7 @@ static PyObject* ROPium_load_rp(PyObject* self, PyObject* args){
 
 static PyObject* ROPium_compile(PyObject* self, PyObject* args){
     const char* query;
-    int query_len;
+    Py_ssize_t query_len; // "s#" with PY_SSIZE_T_CLEAN expects Py_ssize_t, not int
     ROPChain* ropchain;
 
     if( ! PyArg_ParseTuple(args, "s#", &query, &query_len) ){
@@ -162,7 +150,6 @@ static PyObject* ROPium_compile(PyObject* self, PyObject* args){
 
 static PyMethodDef ROPium_methods[] = {
     {"load", (PyCFunction)ROPium_load, METH_VARARGS, "load(<filename>) \nLoad and analyse gadgets from a binary"},
-    {"load_rp", (PyCFunction)ROPium_load_rp, METH_VARARGS, "load_rp(<filename>) \nLoad and analyse gadgets from a rp++ output file"},
     {"compile", (PyCFunction)ROPium_compile, METH_VARARGS, "compile(<query>) \nCompile a semantic query into a ropchain"},
     {NULL, NULL, 0, NULL}
 };

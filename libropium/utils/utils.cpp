@@ -14,6 +14,7 @@
 #include <codecvt>
 #include <locale>
 #include <iomanip>
+#include <cstring>
 
 using std::ifstream;
 using std::ofstream;
@@ -34,7 +35,6 @@ vector<RawGadget>* raw_gadgets_from_file(string filename){
     
     file.open(filename, ios::in | ios::binary );
     while( getline(file, line)){
-        //std::cout << "RAW: Read Line: " << line << std::endl;
         raw = RawGadget();
         got_addr = false;
         addr_str = "";
@@ -135,87 +135,6 @@ bool ropgadget_to_file(string out, string ropgadget_out, string bin){
         return false;
     }
 
-    out_file.close();
-    ropgadget_file.close();
-    return true;
-}
-
-bool rp_gadgets_to_file(string output_file_path, string input_file_path){
-    std::cout << "Start rp_gadgets_to_file. Out: " << output_file_path << " Input: " << input_file_path << std::endl;
-    stringstream cmd;
-    ofstream out_file;
-    ifstream ropgadget_file;
-    string line;
-    int counter = 0;
-    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
-
-    try{
-        out_file.open(output_file_path, ios::out);
-        string addr_str, raw_str;
-        stringstream ss;
-        vector<string> splited;
-        ropgadget_file.open(input_file_path, ios::in);
-        if (!ropgadget_file.is_open()) {
-            std::cerr << "Error: Could not open file: " << input_file_path
-                      << " (" << std::strerror(errno) << ")" << std::endl;
-            return false;
-        }
-        std::regex pattern(R"(\(\d+ found\))");
-        while( std::getline(ropgadget_file, line)){
-            std::wstring line_wstr = converter.from_bytes(line);
-            std::string line_str = converter.to_bytes(line_wstr);
-            line = line_str;
-            line = std::regex_replace(line, pattern, "");
-            // Trim trailing whitespace
-            line = std::regex_replace(line, std::regex("\\s+$"), "");
-            //std::cout << "Read Line: " << line << std::endl;
-            splited.clear();
-            // Split on spaces
-            split(line, splited);
-            //for (const auto& s : splited) {
-            //    std::cout << "Read Gadget:" <<s << std::endl;
-            //}
-            // Get address string
-            if( splited.size() > 3 ){
-                addr_str = splited[0];
-                //std::cout << "Read Line addr_str: " << addr_str << std::endl;
-            }else{
-                continue;
-            }
-            if( addr_str.substr(0, 2) != "0x" ){
-                continue;
-            }
-            // Get raw string - last element of the split
-            raw_str = splited.back();
-            //std::cout << "Read Line raw_str: " << raw_str << std::endl;
-            if (raw_str.find("\\x") != std::string::npos) {
-                size_t pos = 0;
-                while ((pos = raw_str.find("\\x", pos)) != std::string::npos) {
-                    raw_str.erase(pos, 2);
-                }
-            }
-            if( raw_str.back() != '\n' )
-                raw_str += '\n';
-
-            counter++;
-            std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-            std::wstring addr_wstr = std::wstring(addr_str.begin(), addr_str.end());
-            std::string addr_utf8 = conv.to_bytes(addr_wstr);
-            //std::cout << "Read Line addr_wstr: " << addr_utf8 << std::endl;
-            std::wstring raw_wstr = std::wstring(raw_str.begin(), raw_str.end());
-            std::string raw_utf8 = conv.to_bytes(raw_wstr);
-            out_file << addr_utf8 << "$" << raw_utf8;
-        }
-
-    }catch(std::runtime_error& e){
-        std::cerr << "Runtime error: " << e.what() << std::endl;
-        return false;
-    }catch(...){
-        std::cerr << "Unknown error occurred." << std::endl;
-        return false;
-    }
-
-    std::cout << "Gadgets written to file: " << counter << std::endl;
     out_file.close();
     ropgadget_file.close();
     return true;
