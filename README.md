@@ -20,10 +20,17 @@ Key features:
 
 # Content
 - [About](#about)
-- [Installation](#installation)
 - [Getting started](#getting-started)
    - [CLI tool](#cli-tool)
    - [Python API](#python-api)
+- [How it works](#how-it-works)
+- [Installation](#installation)
+- [Usage](#usage)
+   - [CLI tool](#cli-tool-1)
+   - [Python API](#python-api-1)
+   - [Examples: one chain per sample gadget file](#examples-one-chain-per-sample-gadget-file)
+   - [Query language](#query-language)
+- [Using rp++ gadget files](#using-rp-gadget-files)
 - [Docker](#docker)
 - [Contact](#contact)
 - [Licence](#licence)
@@ -337,24 +344,57 @@ Notes:
 
 # Docker
 
-If needed you can run ROPium in a docker container. The container can be generated from the *Dockerfile* as
-follows:
+You can run ROPium in a Docker container — handy if you don't want to install the
+build dependencies (Capstone, Python headers, ROPgadget) on your host. The image is
+based on `python:3.9-slim-bullseye` and already contains everything needed.
+
+## Build the image
 
 ```bash
-# Create your docker image (this will take time!)
 docker build . --tag ropium
-
-# Run the image in interactive mode, bind mounting the file to analyze
-docker run --rm -it -v /FULL/HOST/PATH/FILE:/tmp/FILE:ro ropium
-# ex. docker run --rm -it -v ./ropium/:/ropium/ ropium)
-cd /ropium/
-make clean && make && make install
-ropium
-
-# Analyse a file with ROPium
-(ropium)> load -a X86 /tmp/FILE
 ```
-The actual image is around 200 MB based on a Debian Stretch with a Python 3.7.3 installed. 
+
+## Option 1 — Run commands without entering the container
+
+Mount the repository at `/ropium` and pass any command with `-c`. Build once, then
+run the tests or the Python API directly from your host shell:
+
+```bash
+# Build the library, bindings and tests inside the container
+docker run --rm -v "$(pwd)":/ropium/ ropium -c "cd /ropium && make"
+
+# Run the unit tests
+docker run --rm -v "$(pwd)":/ropium/ ropium -c "cd /ropium && ./bin/tests"
+
+# Compile a chain from the Python API (one-liner)
+docker run --rm -v "$(pwd)":/ropium/ ropium -c "cd /ropium && python3 -c \"
+import sys; sys.path.insert(0, './bin')
+from ropium import ROPium, ARCH
+rop = ROPium(ARCH.X86)
+rop.load_rp('samples/gadgets/efssetup.txt')
+print(rop.compile('ecx = edx').dump())
+\""
+```
+
+> **Note:** the Python module is built as `bin/ropium.so`. When it isn't installed
+> system-wide, add `sys.path.insert(0, './bin')` before importing it (as above).
+
+## Option 2 — Interactive shell in the container
+
+```bash
+# Drop into a shell with the repo mounted at /ropium
+# (add -v /FULL/HOST/PATH/FILE:/tmp/FILE:ro to also mount a binary to analyze)
+docker run --rm -it -v "$(pwd)":/ropium/ ropium
+
+cd /ropium
+make clean && make && make install
+ropium   # start the interactive CLI
+```
+
+```
+(ropium)> load -a X86 /tmp/FILE        # or: load_rp samples/gadgets/efssetup.txt
+(ropium)> find eax = 0x1234
+```
 
 # Contact
 
