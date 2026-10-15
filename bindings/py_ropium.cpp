@@ -150,6 +150,7 @@ static PyObject* ROPium_compile(PyObject* self, PyObject* args){
 
 static PyMethodDef ROPium_methods[] = {
     {"load", (PyCFunction)ROPium_load, METH_VARARGS, "load(<filename>) \nLoad and analyse gadgets from a binary"},
+    {"load_rp", (PyCFunction)ROPium_load_rp, METH_VARARGS, "load_rp(<filename>) \nLoad and analyse gadgets from a rp++ output file"},
     {"compile", (PyCFunction)ROPium_compile, METH_VARARGS, "compile(<query>) \nCompile a semantic query into a ropchain"},
     {NULL, NULL, 0, NULL}
 };
