@@ -25,6 +25,14 @@ else
 	CXXFLAGS += -O2 -Wno-narrowing
 endif
 
+## Profiling with gprof (opt-in): make PROFILE=1 BINDINGS=0 bench
+PROFILE ?= 0
+ifeq ($(PROFILE), 1)
+	CFLAGS += -pg
+	CXXFLAGS += -pg
+	LDFLAGS += -pg
+endif
+
 ## Bindings
 BINDINGS ?= 1
 ifeq ($(BINDINGS), 1)
@@ -57,6 +65,11 @@ TESTDIR = ./tests
 TESTSRCS = $(wildcard $(TESTDIR)/*.cpp)
 TESTOBJS = $(TESTSRCS:.cpp=.o)
 
+# Profiling driver (not part of 'all' nor of the unit tests)
+BENCHDIR = $(TESTDIR)/bench
+BENCHSRCS = $(BENCHDIR)/bench.cpp
+BENCHOBJS = $(BENCHSRCS:.cpp=.o)
+
 DEPDIR = $(SRCDIR)/dependencies
 DEPSRCS = $(DEPDIR)/murmur3/murmur3.c 
 DEPOBJS = $(DEPSRCS:.c=.o)
@@ -77,6 +90,12 @@ tests: $(TESTOBJS) $(OBJS) $(DEPOBJS)
 # bindings
 bindings: $(BINDINGS_OBJS) $(OBJS) $(DEPOBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $(OUTDIR)/$(BINDINGS_FILE) -shared $(BINDINGS_OBJS) $(OBJS) $(DEPOBJS) $(LDLIBS)
+
+# profiling driver (see tests/bench/profile.sh)
+.PHONY: bench
+bench: $(BENCHOBJS) $(OBJS) $(DEPOBJS)
+	@mkdir -p $(OUTDIR)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $(OUTDIR)/bench $(BENCHOBJS) $(OBJS) $(DEPOBJS) $(LDLIBS)
 
 # generic
 %.o : %.cpp
@@ -138,6 +157,7 @@ clean:
 	rm -f $(OBJS)
 	rm -f $(DEPOBJS)
 	rm -f $(TESTOBJS)
+	rm -f $(BENCHOBJS)
 	rm -f $(BINDINGS_OBJS)
 	rm -f `find . -type f -name "*.gch"`
 	rm -f $(OUTDIR)/*
