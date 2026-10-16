@@ -843,6 +843,41 @@ bool StrategyGraph::_check_assigned_gadget_constraints(Node& node, Arch* arch){
     return true;
 }
 
+// The gadget selection overwrites param values (free, dependent and gadget
+// params, special paddings) and assigned gadgets. A failed selection puts them
+// back, so the rules applied to the graph afterwards don't depend on the last
+// candidates the search tried. Node assertions aren't saved: the selection
+// rebuilds them before every use.
+void StrategyGraph::_save_selection_state(SelectionState& state){
+    state.values.clear();
+    state.gadgets.clear();
+    for( Node& node : nodes ){
+        const int nb = node.nb_params();
+        for( int p = 0; p < nb; p++ )
+            state.values.push_back(node.params[p].value);
+        for( ROPPadding& padd : node.special_paddings ){
+            state.values.push_back(padd.offset.value);
+            state.values.push_back(padd.value.value);
+        }
+        state.gadgets.push_back(node.affected_gadget);
+    }
+}
+
+void StrategyGraph::_restore_selection_state(const SelectionState& state){
+    vector<cst_t>::const_iterator value = state.values.begin();
+    vector<Gadget*>::const_iterator gadget = state.gadgets.begin();
+    for( Node& node : nodes ){
+        const int nb = node.nb_params();
+        for( int p = 0; p < nb; p++ )
+            node.params[p].value = *(value++);
+        for( ROPPadding& padd : node.special_paddings ){
+            padd.offset.value = *(value++);
+            padd.value.value = *(value++);
+        }
+        node.affected_gadget = *(gadget++);
+    }
+}
+
 /* This function tries to find a gadget selection for a strategy graph.
  It iteratively (the order is the one of the DFS on parameter dependencies) resolves
  parameters and queries the database to find a matching gadget on each node of the
@@ -866,7 +901,11 @@ bool StrategyGraph::select_gadgets(GadgetDB& db, Constraint* constraint, Arch* a
         compute_dfs_params();
         compute_dfs_strategy();
         params_ctx = VarContext(); // New context for params
+        SelectionState saved;
+        _save_selection_state(saved);
         has_gadget_selection = select_gadgets(db, constraint, arch, 0);
+        if( !has_gadget_selection )
+            _restore_selection_state(saved);
         return has_gadget_selection;
     }
 

@@ -476,7 +476,14 @@ private:
     bool _check_assigned_gadget_constraints(Node& node, Arch* arch);
     bool _check_special_padding_constraints(Node& node, Arch* arch, Constraint* constraint=nullptr);
     bool _do_scheduling(int interference_idx=0);
-    
+    // What a gadget selection writes in the nodes
+    struct SelectionState{
+        vector<cst_t> values; // Params and special paddings
+        vector<Gadget*> gadgets; // affected_gadget of each node
+    };
+    void _save_selection_state(SelectionState& state);
+    void _restore_selection_state(const SelectionState& state);
+
     bool has_gadget_selection;
     VarContext params_ctx;
     int _depth;
