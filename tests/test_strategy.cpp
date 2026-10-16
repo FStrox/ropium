@@ -56,6 +56,22 @@ namespace test{
             return nb;
         }
         
+        unsigned int param_slots(){
+            unsigned int nb = 0;
+            Param param;
+            param.make_cst(1, "param_test_cst");
+            nb += _assert( param.name() == "param_test_cst", "Param: wrong name");
+            nb += _assert( param.slot() == var_slot("param_test_cst"), "Param: wrong slot");
+
+            // A copy keeps the slot, a rename looks up the new name's slot
+            Param copy = param;
+            copy.rename("param_test_renamed");
+            nb += _assert( copy.name() == "param_test_renamed" && copy.value == 1, "Param: rename() changed more than the name");
+            nb += _assert( copy.slot() == var_slot("param_test_renamed"), "Param: rename() kept the old slot");
+            nb += _assert( param.slot() == var_slot("param_test_cst"), "Param: renaming a copy changed the original");
+            return nb;
+        }
+
         unsigned int rules(){
             unsigned int nb = 0;
             Arch* arch = new ArchX86();
@@ -456,6 +472,7 @@ void test_strategy(){
     for( int i = 0; i < 1; i++){
         total += basic();
         total += rules();
+        total += param_slots();
         total += test_generic_adjust_jmp();
         total += test_adjust_load();
         total += test_generic_src_transitivity();

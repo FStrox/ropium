@@ -481,7 +481,7 @@ bool ROPCompiler::_x86_cdecl_to_strategy(StrategyGraph& graph, ILInstruction& in
         // The offset is sp_inc + arch_size_bytes*(param_num+1) (+1 because return address comes before args)
         node.special_paddings.back().offset.make_cst(
             node.id, PARAM_MOVCST_GADGET_SP_INC,
-            exprvar(arch->bits, node.params[PARAM_MOVCST_GADGET_SP_INC].name) + (arch->octets * ((i-1)+1)),
+            exprvar(arch->bits, node.params[PARAM_MOVCST_GADGET_SP_INC].name()) + (arch->octets * ((i-1)+1)),
             graph.new_name("func_arg_offset")
         );
         if( instr.args_type[i] == IL_FUNC_ARG_CST ){
@@ -504,11 +504,11 @@ bool ROPCompiler::_x86_cdecl_to_strategy(StrategyGraph& graph, ILInstruction& in
     node.special_paddings.push_back(ROPPadding());
     node.special_paddings.back().offset.make_cst(
             node.id, PARAM_MOVCST_GADGET_SP_INC,
-            exprvar(arch->bits, node.params[PARAM_MOVCST_GADGET_SP_INC].name),
+            exprvar(arch->bits, node.params[PARAM_MOVCST_GADGET_SP_INC].name()),
             graph.new_name("func_ret_addr_offset")
         );
     node.special_paddings.back().value.make_cst(node_ret.id, PARAM_LOAD_GADGET_ADDR,
-        exprvar(arch->bits, node_ret.params[PARAM_LOAD_GADGET_ADDR].name), graph.new_name("func_ret_addr"));
+        exprvar(arch->bits, node_ret.params[PARAM_LOAD_GADGET_ADDR].name()), graph.new_name("func_ret_addr"));
 
     // Add mandatory following node
     node.mandatory_following_node = node_ret.id;
@@ -539,7 +539,7 @@ bool ROPCompiler::_x86_stdcall_to_strategy(StrategyGraph& graph, ILInstruction& 
         // The offset is sp_inc + arch_size_bytes*(param_num+1) (+1 because return address comes before args)
         node.special_paddings.back().offset.make_cst(
             node.id, PARAM_MOVCST_GADGET_SP_INC,
-            exprvar(arch->bits, node.params[PARAM_MOVCST_GADGET_SP_INC].name) + (arch->octets * ((i-1)+1)),
+            exprvar(arch->bits, node.params[PARAM_MOVCST_GADGET_SP_INC].name()) + (arch->octets * ((i-1)+1)),
             graph.new_name("func_arg_offset")
         );
         if( instr.args_type[i] == IL_FUNC_ARG_CST ){
@@ -562,11 +562,11 @@ bool ROPCompiler::_x86_stdcall_to_strategy(StrategyGraph& graph, ILInstruction& 
     node.special_paddings.push_back(ROPPadding());
     node.special_paddings.back().offset.make_cst(
             node.id, PARAM_MOVCST_GADGET_SP_INC,
-            exprvar(arch->bits, node.params[PARAM_MOVCST_GADGET_SP_INC].name),
+            exprvar(arch->bits, node.params[PARAM_MOVCST_GADGET_SP_INC].name()),
             graph.new_name("func_ret_addr_offset")
         );
     node.special_paddings.back().value.make_cst(node_ret.id, PARAM_LOAD_GADGET_ADDR,
-        exprvar(arch->bits, node_ret.params[PARAM_LOAD_GADGET_ADDR].name), graph.new_name("func_ret_addr"));
+        exprvar(arch->bits, node_ret.params[PARAM_LOAD_GADGET_ADDR].name()), graph.new_name("func_ret_addr"));
 
     // Add mandatory following node
     node.mandatory_following_node = node_ret.id;
@@ -620,7 +620,7 @@ ROPChain* ROPCompiler::_compile_x64_system_v_call(ILInstruction& instr, Constrai
         // The offset is sp_inc + arch_size_bytes*(param_num+1) (+1 because return address comes before args)
         graph->nodes[call_node].special_paddings.back().offset.make_cst(
             call_node, PARAM_MOVCST_GADGET_SP_INC,
-            exprvar(arch->bits, graph->nodes[call_node].params[PARAM_MOVCST_GADGET_SP_INC].name) + (arch->octets * (i+1)),
+            exprvar(arch->bits, graph->nodes[call_node].params[PARAM_MOVCST_GADGET_SP_INC].name()) + (arch->octets * (i+1)),
             graph->new_name("func_arg_offset")
         );
         if( instr.args_type[PARAM_FUNCTION_ARGS+6+i] == IL_FUNC_ARG_CST ){
@@ -635,11 +635,11 @@ ROPChain* ROPCompiler::_compile_x64_system_v_call(ILInstruction& instr, Constrai
     graph->nodes[call_node].special_paddings.push_back(ROPPadding());
     graph->nodes[call_node].special_paddings.back().offset.make_cst(
             call_node, PARAM_MOVCST_GADGET_SP_INC,
-            exprvar(arch->bits, graph->nodes[call_node].params[PARAM_MOVCST_GADGET_SP_INC].name),
+            exprvar(arch->bits, graph->nodes[call_node].params[PARAM_MOVCST_GADGET_SP_INC].name()),
             graph->new_name("func_ret_addr_offset")
         );
     graph->nodes[call_node].special_paddings.back().value.make_cst(ret_node, PARAM_LOAD_GADGET_ADDR,
-        exprvar(arch->bits, graph->nodes[ret_node].params[PARAM_LOAD_GADGET_ADDR].name), graph->new_name("func_ret_addr"));
+        exprvar(arch->bits, graph->nodes[ret_node].params[PARAM_LOAD_GADGET_ADDR].name()), graph->new_name("func_ret_addr"));
 
     // Add 'ret' node as mandatory following node
     graph->nodes[call_node].mandatory_following_node = ret_node;
@@ -730,7 +730,7 @@ ROPChain* ROPCompiler::_compile_x64_ms_call(ILInstruction& instr, Constraint* co
         // The offset is sp_inc + arch_size_bytes*(param_num+1) (+1 because return address comes before args)
         graph->nodes[call_node].special_paddings.back().offset.make_cst(
             call_node, PARAM_MOVCST_GADGET_SP_INC,
-            exprvar(arch->bits, graph->nodes[call_node].params[PARAM_MOVCST_GADGET_SP_INC].name) + (arch->octets * (i+1)),
+            exprvar(arch->bits, graph->nodes[call_node].params[PARAM_MOVCST_GADGET_SP_INC].name()) + (arch->octets * (i+1)),
             graph->new_name("func_arg_offset")
         );
         if( instr.args_type[PARAM_FUNCTION_ARGS+4+i] == IL_FUNC_ARG_CST ){
@@ -745,11 +745,11 @@ ROPChain* ROPCompiler::_compile_x64_ms_call(ILInstruction& instr, Constraint* co
     graph->nodes[call_node].special_paddings.push_back(ROPPadding());
     graph->nodes[call_node].special_paddings.back().offset.make_cst(
             call_node, PARAM_MOVCST_GADGET_SP_INC,
-            exprvar(arch->bits, graph->nodes[call_node].params[PARAM_MOVCST_GADGET_SP_INC].name),
+            exprvar(arch->bits, graph->nodes[call_node].params[PARAM_MOVCST_GADGET_SP_INC].name()),
             graph->new_name("func_ret_addr_offset")
         );
     graph->nodes[call_node].special_paddings.back().value.make_cst(ret_node, PARAM_LOAD_GADGET_ADDR,
-        exprvar(arch->bits, graph->nodes[ret_node].params[PARAM_LOAD_GADGET_ADDR].name), graph->new_name("func_ret_addr"));
+        exprvar(arch->bits, graph->nodes[ret_node].params[PARAM_LOAD_GADGET_ADDR].name()), graph->new_name("func_ret_addr"));
 
     // Add 'ret' node as mandatory following node
     graph->nodes[call_node].mandatory_following_node = ret_node;
@@ -987,7 +987,7 @@ bool _cst_store_cst_to_strategy(StrategyGraph& graph, ILInstruction& instr, Arch
     node2.params[PARAM_MOVCST_DST_REG].make_reg(n1, PARAM_STORE_DST_ADDR_REG); // node2 X is same as addr reg in node1
     node2.params[PARAM_MOVCST_DST_REG].is_data_link = true;
     node2.params[PARAM_MOVCST_SRC_CST].make_cst(n1, PARAM_STORE_DST_ADDR_OFFSET, 
-        instr.args[PARAM_CSTSTORECST_DST_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_STORE_DST_ADDR_OFFSET].name)
+        instr.args[PARAM_CSTSTORECST_DST_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_STORE_DST_ADDR_OFFSET].name())
         , graph.new_name("cst")); // node2 cst is the target const C minus the offset in the node1 load
     
     node3.params[PARAM_MOVCST_DST_REG].make_reg(n1, PARAM_STORE_SRC_REG);
@@ -1136,7 +1136,7 @@ void ROPCompiler::il_to_strategy(vector<StrategyGraph*>& graphs, ILInstruction& 
         
         node2.params[PARAM_MOVCST_DST_REG].make_reg(n1, PARAM_LOAD_SRC_ADDR_REG); // node2 X is same as addr reg in node1
         node2.params[PARAM_MOVCST_SRC_CST].make_cst(n1, PARAM_LOAD_SRC_ADDR_OFFSET, 
-            instr.args[PARAM_LOADCST_SRC_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_LOAD_SRC_ADDR_OFFSET].name)
+            instr.args[PARAM_LOADCST_SRC_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_LOAD_SRC_ADDR_OFFSET].name())
             , graph->new_name("cst")); // node2 cst is the target const C minus the offset in the node1 load
         
         graph->add_param_edge(n2, n1);
@@ -1164,7 +1164,7 @@ void ROPCompiler::il_to_strategy(vector<StrategyGraph*>& graphs, ILInstruction& 
 
         node2.params[PARAM_MOVCST_DST_REG].make_reg(n1, PARAM_ALOAD_SRC_ADDR_REG); // node2 X is same as addr reg in node1
         node2.params[PARAM_MOVCST_SRC_CST].make_cst(n1, PARAM_ALOAD_SRC_ADDR_OFFSET, 
-            instr.args[PARAM_ALOADCST_SRC_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_ALOAD_SRC_ADDR_OFFSET].name)
+            instr.args[PARAM_ALOADCST_SRC_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_ALOAD_SRC_ADDR_OFFSET].name())
             , graph->new_name("cst")); // node2 cst is the target const C minus the offset in the node1 load
         
         graph->add_param_edge(n2, n1);
@@ -1213,7 +1213,7 @@ void ROPCompiler::il_to_strategy(vector<StrategyGraph*>& graphs, ILInstruction& 
         
         node2.params[PARAM_MOVCST_DST_REG].make_reg(n1, PARAM_STORE_DST_ADDR_REG); // node2 X is same as addr reg in node1
         node2.params[PARAM_MOVCST_SRC_CST].make_cst(n1, PARAM_STORE_DST_ADDR_OFFSET, 
-            instr.args[PARAM_CSTSTORE_DST_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_STORE_DST_ADDR_OFFSET].name)
+            instr.args[PARAM_CSTSTORE_DST_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_STORE_DST_ADDR_OFFSET].name())
             , graph->new_name("cst")); // node2 cst is the target const C minus the offset in the node1 load
         
         graph->add_param_edge(n2, n1);
@@ -1265,7 +1265,7 @@ void ROPCompiler::il_to_strategy(vector<StrategyGraph*>& graphs, ILInstruction& 
 
         node2.params[PARAM_MOVCST_DST_REG].make_reg(n1, PARAM_ASTORE_DST_ADDR_REG); // node2 X is same as addr reg in node1
         node2.params[PARAM_MOVCST_SRC_CST].make_cst(n1, PARAM_ASTORE_DST_ADDR_OFFSET, 
-            instr.args[PARAM_CSTASTORE_DST_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_ASTORE_DST_ADDR_OFFSET].name)
+            instr.args[PARAM_CSTASTORE_DST_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_ASTORE_DST_ADDR_OFFSET].name())
             , graph->new_name("cst")); // node2 cst is the target const C minus the offset in the node1 load
 
         graph->add_param_edge(n2, n1);
@@ -1358,7 +1358,7 @@ void ROPCompiler::il_to_strategy(vector<StrategyGraph*>& graphs, ILInstruction& 
         node2.params[PARAM_MOVCST_DST_REG].make_reg(n1, PARAM_ASTORE_DST_ADDR_REG); // node2 X is same as addr reg in node1
         node2.params[PARAM_MOVCST_DST_REG].is_data_link = true;
         node2.params[PARAM_MOVCST_SRC_CST].make_cst(n1, PARAM_ASTORE_DST_ADDR_OFFSET, 
-            instr.args[PARAM_CSTASTORECST_DST_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_ASTORE_DST_ADDR_OFFSET].name)
+            instr.args[PARAM_CSTASTORECST_DST_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_ASTORE_DST_ADDR_OFFSET].name())
             , graph->new_name("cst")); // node2 cst is the target const C minus the offset in the node1 load
         
         node3.params[PARAM_MOVCST_DST_REG].make_reg(n1, PARAM_ASTORE_SRC_REG);

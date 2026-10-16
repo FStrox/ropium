@@ -5,7 +5,9 @@
 #include "murmur3.h"
 #include <algorithm>
 #include <atomic>
+#include <deque>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 
 using std::make_shared;
@@ -114,7 +116,7 @@ bool ExprObject::inf(Expr e2){
     }
 }
 
-void ExprObject::replace_var_name(string& curr_name, string& new_name){
+void ExprObject::replace_var_name(const string& curr_name, const string& new_name){
     switch(type){
         case ExprType::CST: return;
         case ExprType::VAR: 
@@ -161,7 +163,8 @@ Expr ExprCst::copy(){
     return exprcst(size, _cst);
 }
 // ==================================
-ExprVar::ExprVar(exprsize_t s, string n, int num): ExprObject(ExprType::VAR, s, true), _name(n), _num(num){
+ExprVar::ExprVar(exprsize_t s, string n, int num): ExprObject(ExprType::VAR, s, true), _name(n), _num(num),
+    _slot(VARSLOT_NONE){
     if( s > 64 ){
         throw expression_exception(QuickFmt() << "Cannot create symbolic variables of size > 64 (got "
             << std::dec << s << ")" >> QuickFmt::to_str);
@@ -188,13 +191,19 @@ cst_t ExprVar::concretize(VarContext* ctx){
     if( _concrete_ctx_id == ctx->id() )
         return _concrete;
     else{
-        _concrete = ctx->get(_name);
+        if( _slot == VARSLOT_NONE ){
+            _slot = var_slot(_name);
+        }
+        _concrete = ctx->get_slot(_slot);
         _concrete_ctx_id = ctx->id(); 
     }
     return _concrete; 
 }
 const string& ExprVar::name(){ return _name; } 
-void ExprVar::replace_name(string& new_name){ _name = new_name; }
+void ExprVar::replace_name(const string& new_name){
+    _name = new_name;
+    _slot = VARSLOT_NONE;
+}
 void ExprVar::print(ostream& os){os << _name;}
 Expr ExprVar::copy(){
     return exprvar(size, _name);
@@ -1010,45 +1019,113 @@ cst_t cst_sign_extend(exprsize_t size, cst_t c){
 }
 
 /* ====================================== */
+namespace{
+    // Names are never removed. A deque keeps references to them valid while
+    // it grows, so var_slot_name() can return one without holding the lock.
+    struct VarSlotTable{
+        std::mutex lock;
+        unordered_map<string, varslot_t> slots;
+        std::deque<string> names;
+    };
+
+    // Function-local static: initialized on first use, whatever the
+    // initialization order of the other translation units
+    VarSlotTable& var_slot_table(){
+        static VarSlotTable table;
+        return table;
+    }
+}
+
+varslot_t var_slot(const string& name){
+    VarSlotTable& table = var_slot_table();
+    std::lock_guard<std::mutex> guard(table.lock);
+    auto it = table.slots.find(name);
+    if( it != table.slots.end() ){
+        return it->second;
+    }
+    if( table.names.size() >= VARSLOT_NONE ){
+        throw expression_exception("Too many distinct variable names");
+    }
+    varslot_t slot = table.names.size();
+    table.names.push_back(name);
+    table.slots.emplace(name, slot);
+    return slot;
+}
+
+bool find_var_slot(const string& name, varslot_t& slot){
+    VarSlotTable& table = var_slot_table();
+    std::lock_guard<std::mutex> guard(table.lock);
+    auto it = table.slots.find(name);
+    if( it == table.slots.end() ){
+        return false;
+    }
+    slot = it->second;
+    return true;
+}
+
+const string& var_slot_name(varslot_t slot){
+    VarSlotTable& table = var_slot_table();
+    std::lock_guard<std::mutex> guard(table.lock);
+    if( slot >= table.names.size() ){
+        throw expression_exception(QuickFmt() << "Invalid variable slot " << std::dec << slot >> QuickFmt::to_str);
+    }
+    return table.names[slot];
+}
+
+size_t var_slot_count(){
+    VarSlotTable& table = var_slot_table();
+    std::lock_guard<std::mutex> guard(table.lock);
+    return table.names.size();
+}
+
 // Process-wide so that two contexts never share an id (see VarContext in
 // expression.hpp). 64 bits cannot wrap during a search. Relaxed ordering is
 // enough: only the uniqueness of the returned values matters.
 static std::atomic<varctx_id_t> next_varctx_id(VARCTX_ID_NONE + 1);
 
-static varctx_id_t new_varctx_id(){
+varctx_id_t new_varctx_id(){
     return next_varctx_id.fetch_add(1, std::memory_order_relaxed);
 }
 
 VarContext::VarContext(): _id(new_varctx_id()){}
 
-void VarContext::set(const string& name, cst_t value){
-    auto it = varmap.find(name);
-    if( it == varmap.end() ){
-        varmap.emplace(name, value);
-    }else if( it->second != value ){
-        it->second = value;
-    }else{
-        return; // Same value, cached concretizations are still valid
-    }
-    _id = new_varctx_id();
+[[noreturn]] static void throw_unknown_var(const string& name){
+    throw expression_exception(QuickFmt() << "Trying to access variable '"
+            << name << "' which is unknown in context" >> QuickFmt::to_str);
 }
 
-cst_t VarContext::get(const string& name){
-    auto it = varmap.find(name);
-    if( it == varmap.end())
-        throw expression_exception(QuickFmt() << "Trying to access variable '"
-            << name << "' which is unknown in context" >> QuickFmt::to_str);
-    return it->second;
+void VarContext::_throw_unknown_var(varslot_t slot) const{
+    throw_unknown_var(slot < var_slot_count() ? var_slot_name(slot) : string("<invalid slot>"));
+}
+
+void VarContext::set(const string& name, cst_t value){
+    set_slot(var_slot(name), value);
+}
+
+cst_t VarContext::get(const string& name) const{
+    varslot_t slot;
+    if( !find_var_slot(name, slot) ){
+        throw_unknown_var(name);
+    }
+    return get_slot(slot);
 }
 
 void VarContext::remove(const string& name){
-    if( varmap.erase(name) > 0 )
+    varslot_t slot;
+    if( find_var_slot(name, slot) && slot < _vars.size() && _vars[slot].is_set ){
+        _vars[slot].is_set = false;
         _id = new_varctx_id();
+    }
 }
 
-void VarContext::print(ostream& os ){
-    // Sort by name so that the output does not depend on hashing
-    map<string, cst_t> sorted(varmap.begin(), varmap.end());
+void VarContext::print(ostream& os) const{
+    // Sort by name so that the output does not depend on slot numbers
+    map<string, cst_t> sorted;
+    for( varslot_t slot = 0; slot < _vars.size(); slot++ ){
+        if( _vars[slot].is_set ){
+            sorted.emplace(var_slot_name(slot), _vars[slot].value);
+        }
+    }
     os << std::endl;
     for( auto& var : sorted ){
         os << var.first << " : " << std::hex << "0x" << var.second << std::dec << std::endl;

@@ -382,7 +382,7 @@ void _redirect_param_deps(Param& param, Node& curr_node, param_t curr_param_type
             // Change var name in expression if constant
             if( param.type == ParamType::CST && param.expr != nullptr){
                 Expr e = param.expr->copy();
-                e->replace_var_name(curr_node.params[curr_param_type].name, new_node.params[new_param_type].name); 
+                e->replace_var_name(curr_node.params[curr_param_type].name(), new_node.params[new_param_type].name()); 
                 param.expr = e;
             }
             // Redirect
@@ -658,7 +658,7 @@ void StrategyGraph::_resolve_param(Param& param){
     }
     // If constant, update the context
     if( param.type == ParamType::CST){
-        params_ctx.set(param.name, param.value);
+        params_ctx.set_slot(param.slot(), param.value);
     }
 }
 
@@ -900,7 +900,7 @@ bool StrategyGraph::select_gadgets(GadgetDB& db, Constraint* constraint, Arch* a
                 if( node.params[p].is_free())
                     node.params[p].value = pos.first[p];
                 if( node.params[p].is_cst())
-                    params_ctx.set(node.params[p].name, node.params[p].value);
+                    params_ctx.set_slot(node.params[p].slot(), node.params[p].value);
             }
             // Resolve params again (useful for special paddings that depend
             // on regular parameters such as offsets, etc)
@@ -1178,8 +1178,8 @@ ostream& operator<<(ostream& os, Param& param){
     }
     if( param.expr != nullptr )
         os << tab << "\t Expr: " << param.expr << std::endl;
-    if( !param.name.empty())
-        os << tab << "\t Name: " << param.name << std::endl;
+    if( !param.name().empty())
+        os << tab << "\t Name: " << param.name() << std::endl;
     return os;
 }
 

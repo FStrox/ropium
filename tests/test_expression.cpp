@@ -319,6 +319,63 @@ namespace test{
             return nb;
         }
 
+        unsigned int var_slots(){
+            unsigned int nb = 0;
+            varslot_t slot1 = var_slot("slot_test_var1"), slot2 = var_slot("slot_test_var2"), found;
+            bool got_exception = false;
+
+            // One slot per distinct name, for the whole process
+            nb += _assert( slot1 != slot2, "Two names got the same slot");
+            nb += _assert( var_slot("slot_test_var1") == slot1, "A name got two different slots");
+            nb += _assert( var_slot_name(slot2) == "slot_test_var2", "Wrong name for a slot");
+            nb += _assert( find_var_slot("slot_test_var1", found) && found == slot1, "find_var_slot() missed a name");
+            size_t count = var_slot_count();
+            nb += _assert( !find_var_slot("slot_test_never_added", found), "find_var_slot() found an unknown name");
+            nb += _assert( var_slot_count() == count, "find_var_slot() added a name");
+
+            // Setting by name or by slot is the same
+            VarContext ctx;
+            ctx.set("slot_test_var1", 10);
+            ctx.set_slot(slot2, -2);
+            nb += _assert( ctx.get_slot(slot1) == 10 && ctx.get("slot_test_var2") == -2, "Name and slot access disagree");
+            nb += _assert( exprvar(32, "slot_test_var2")->concretize(&ctx) == -2, "Concretization by slot gave wrong result");
+
+            // Unknown variables throw, whether looked up by name or by slot
+            try{ ctx.get("slot_test_never_added"); }catch(expression_exception& e){ got_exception = true; }
+            nb += _assert( got_exception, "Reading an unknown name should throw");
+            got_exception = false;
+            try{ ctx.get_slot(var_slot("slot_test_var3")); }catch(expression_exception& e){ got_exception = true; }
+            nb += _assert( got_exception, "Reading an unset slot should throw");
+            got_exception = false;
+            ctx.remove("slot_test_var1");
+            try{ ctx.get_slot(slot1); }catch(expression_exception& e){ got_exception = true; }
+            nb += _assert( got_exception, "Reading a removed variable should throw");
+
+            // Printing is sorted by name, not by slot
+            VarContext ctx2;
+            std::stringstream ss;
+            ctx2.set("slot_test_var2", 2);
+            ctx2.set("slot_test_var1", 1);
+            ctx2.print(ss);
+            nb += _assert( ss.str() == "\nslot_test_var1 : 0x1\nslot_test_var2 : 0x2\n", "Context printed in the wrong order");
+            return nb;
+        }
+
+        // Renaming a variable must also forget the slot it cached
+        unsigned int renamed_var_slot(){
+            unsigned int nb = 0;
+            Expr v = exprvar(32, "rename_test_var1");
+            VarContext ctx, ctx2;
+            ctx.set("rename_test_var1", 1);
+            nb += _assert( v->concretize(&ctx) == 1, "Concretization gave wrong result");
+
+            v->replace_name("rename_test_var2");
+            ctx2.set("rename_test_var1", 7);
+            ctx2.set("rename_test_var2", 5);
+            nb += _assert( v->concretize(&ctx2) == 5, "Renamed variable read the value of its old name");
+            return nb;
+        }
+
     }
 }
 
@@ -339,6 +396,8 @@ void test_expression(){
     total += change_varctx();
     total += varctx_id();
     total += shared_expr_varctx();
+    total += var_slots();
+    total += renamed_var_slot();
     // Return res
     cout << "\t" << total << "/" << total << green << "\t\tOK" << def << endl;
 }

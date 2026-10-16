@@ -30,9 +30,10 @@ struct ParamDep{
 };
 
 class Param{
+    string _name; // Name for the param (constants only), set by make_cst()
+    varslot_t _slot; // Slot of _name in VarContexts, looked up on first use
 public:
     ParamType type; 
-    string name; // Name for the param (used for 'free' constants only)
     // Value
     cst_t value; // Used to put constant OR regnum
     // Dependencies
@@ -41,7 +42,20 @@ public:
     bool is_fixed;
     bool is_data_link; 
 
-    Param():type(ParamType::NONE), name(""), value(-1), expr(nullptr), is_fixed(true), is_data_link(false){};
+    Param():_name(""), _slot(VARSLOT_NONE), type(ParamType::NONE), value(-1), expr(nullptr), is_fixed(true), is_data_link(false){};
+
+    const string& name() const { return _name; }
+    varslot_t slot(){
+        if( _slot == VARSLOT_NONE ){
+            _slot = var_slot(_name);
+        }
+        return _slot;
+    }
+    // Give the param a new name, keeping its value and dependencies
+    void rename(const string& n){
+        _name = n;
+        _slot = VARSLOT_NONE;
+    }
 
     void add_dep(node_t n, param_t p){
         // Check if already present
@@ -84,7 +98,7 @@ public:
     // Fixed or free constant
     void make_cst(cst_t val, string n, bool fixed=true){
         type = ParamType::CST;
-        name = n;
+        rename(n);
         value = val;
         is_fixed = fixed;
         deps.clear();
@@ -95,7 +109,7 @@ public:
     // Dependent constant
     void make_cst(node_t dn, int dpt, Expr e, string n){
         type = ParamType::CST;
-        name = n;
+        rename(n);
         value = 0;
         is_fixed = false;
         deps.clear();
