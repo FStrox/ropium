@@ -190,13 +190,79 @@ namespace test{
 
         // Reference for has_possible_*(): does get_possible_*() return a
         // gadget with the right branch type?
-        bool _possible_has_branch(PossibleGadgets* possible, BranchType branch){
+        bool _possible_has_branch(std::shared_ptr<const PossibleGadgets> possible, BranchType branch){
             bool res = false;
             for( auto& pos : possible->gadgets )
                 for( Gadget* g : *(pos.second) )
                     res = res || branch == BranchType::ANY || g->branch_type == branch;
-            delete possible;
             return res;
+        }
+
+        bool _same_possible(const PossibleGadgets& p1, const PossibleGadgets& p2){
+            if( p1.gadgets.size() != p2.gadgets.size() )
+                return false;
+            for( int i = 0; i < p1.gadgets.size(); i++ )
+                if( p1.gadgets[i].first != p2.gadgets[i].first || p1.gadgets[i].second != p2.gadgets[i].second )
+                    return false;
+            return true;
+        }
+
+        // get_possible_*() results are cached: they must equal the uncached
+        // result, not depend on the values of free params, and follow add()
+        unsigned int possible_cache_db(){
+            unsigned int nb = 0;
+            ArchX86 arch;
+            GadgetDB db;
+            vector<RawGadget> raw;
+            raw.push_back(RawGadget(string("\x89\xf9\xbb\x01\x00\x00\x00\xc3", 8), 0)); // mov ecx, edi; mov ebx, 1; ret
+            raw.push_back(RawGadget(string("\x89\xC3\xC3", 3), 1)); // mov ebx, eax; ret
+            raw.push_back(RawGadget(string("\x89\xCB\xC3", 3), 2)); // mov ebx, ecx; ret
+            raw.push_back(RawGadget(string("\x89\xF5\xFF\xE0", 4), 3)); // mov ebp, esi; jmp eax
+            raw.push_back(RawGadget(string("\x8b\x59\xf7\x89\xd8\xc3", 6), 4)); // mov ebx, [ecx-9]; mov eax, ebx; ret
+            db.analyse_raw_gadgets(raw, &arch);
+
+            bool is_free[2];
+            for( int mask = 0; mask < 4; mask++ ){
+                is_free[0] = mask & 1;
+                is_free[1] = mask & 2;
+                for( reg_t r1 = X86_EAX; r1 <= X86_EIP; r1++ ){
+                    for( reg_t r2 = X86_EAX; r2 <= X86_EIP; r2++ ){
+                        PossibleGadgets* uncached = db.mov_reg.get_possible(make_tuple(r1, r2), is_free, 2);
+                        std::shared_ptr<const PossibleGadgets> cached = db.get_possible_mov_reg(r1, r2, is_free);
+                        nb += _assert(_same_possible(*cached, *uncached), "GadgetDB: cached get_possible_mov_reg() differs");
+                        nb += _assert(db.get_possible_mov_reg(r1, r2, is_free) == cached, "GadgetDB: get_possible_mov_reg() not cached");
+                        delete uncached;
+                    }
+                }
+            }
+            // Values of free params are not part of the query
+            bool src_free[2] = {false, true};
+            std::shared_ptr<const PossibleGadgets> ebx_x = db.get_possible_mov_reg(X86_EBX, X86_EAX, src_free);
+            nb += _assert(db.get_possible_mov_reg(X86_EBX, X86_ESI, src_free) == ebx_x, "GadgetDB: free param value changed the query");
+            nb += _assert(ebx_x->gadgets.size() == 2, "GadgetDB: expected mov ebx, eax and mov ebx, ecx");
+
+            // add() empties the cache; results already handed out stay valid
+            raw.clear();
+            raw.push_back(RawGadget(string("\x89\xD3\xC3", 3), 5)); // mov ebx, edx; ret
+            db.analyse_raw_gadgets(raw, &arch);
+            nb += _assert(db.mov_reg.possible_cache_size() == 0, "GadgetDB: add() kept cached queries");
+            nb += _assert(db.get_possible_mov_reg(X86_EBX, X86_EAX, src_free)->gadgets.size() == 3, "GadgetDB: stale cached query after add()");
+            nb += _assert(ebx_x->gadgets.size() == 2 && ebx_x->gadgets[0].second->size() == 1, "GadgetDB: handed out result changed");
+
+            // The cache is bounded
+            bool dst_free[3] = {true, false, false};
+            // eax and ebx <- mem(ecx - 9)
+            std::shared_ptr<const PossibleGadgets> first = db.get_possible_load(X86_EAX, X86_ECX, -9, dst_free);
+            nb += _assert(first->gadgets.size() == 2, "GadgetDB: expected two loads from ecx - 9");
+            for( cst_t offset = 0; offset < 5000; offset++ ){
+                db.get_possible_load(X86_EAX, X86_ECX, offset, dst_free);
+                nb += _assert(db.load.possible_cache_size() <= BaseDB<tuple<reg_t, reg_t, addr_t>>::POSSIBLE_CACHE_MAX,
+                              "GadgetDB: get_possible cache grew past its limit");
+            }
+            nb += _assert(first->gadgets.size() == 2, "GadgetDB: a result was freed while still used");
+            db.clear();
+            nb += _assert(db.mov_reg.possible_cache_size() == 0 && db.load.possible_cache_size() == 0, "GadgetDB: clear() kept cached queries");
+            return nb;
         }
 
         unsigned int has_possible_db(){
@@ -266,6 +332,7 @@ void test_database(){
     total += clear_db();
     total += lookup_miss_db();
     total += has_possible_db();
+    total += possible_cache_db();
     // Return res
     cout << "\t" << total << "/" << total << green << "\t\tOK" << def << endl;
 }

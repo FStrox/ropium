@@ -4,6 +4,9 @@
 #include <iostream>
 #include <tuple>
 #include <unordered_map>
+#include <map>
+#include <array>
+#include <memory>
 #include "utils.hpp"
 #include "expression.hpp"
 #include "ropchain.hpp"
@@ -73,13 +76,27 @@ inline bool has_branch_type(const vector<Gadget*>& gadgets, BranchType branch){
     return false;
 }
 
-template<class K> 
+// Number of params in a database key
+template<class K> struct db_key_size{ static const int value = 1; };
+template<class... T> struct db_key_size<std::tuple<T...>>{ static const int value = sizeof...(T); };
+
+template<class K>
 class BaseDB{
+    // get_possible_cached() results. A query is the set of free params and
+    // the values of the others. The cache is emptied when the table changes
+    // (add(), clear()) and when it is full; callers share each result and
+    // keep it alive as long as they use it.
+    typedef std::pair<unsigned int, std::array<cst_t, db_key_size<K>::value>> possible_query_t;
+    std::map<possible_query_t, std::shared_ptr<const PossibleGadgets>> _possible_cache;
+
 public:
+    static const size_t POSSIBLE_CACHE_MAX = 4096; // A long search does ~100 queries per table
+    // Change only with add() and clear(), they keep the cache in sync
     unordered_map<K, vector<Gadget*>> db;
 
     // Template methods
     void add(K key, Gadget* gadget){
+        _possible_cache.clear();
         vector<Gadget*>::iterator it;
         int index;
         if( db.count(key) > 0 ){
@@ -109,7 +126,9 @@ public:
         return true;
     }
 
-    PossibleGadgets* get_possible(K key, bool* param_is_free, int nb_params){
+    // Gadgets whose key matches 'key' on the params that are not free, sorted
+    // by size (equal sizes keep the table order). The caller owns the result.
+    PossibleGadgets* get_possible(K key, const bool* param_is_free, int nb_params){
         PossibleGadgets* res = new PossibleGadgets();
         int index;
         for( auto& it : db ){
@@ -123,6 +142,32 @@ public:
         return res;
     }
 
+    // Same result as get_possible(), shared and cached: the gadget selection
+    // repeats the same few queries millions of times, and a search doesn't
+    // change the table, so neither the result nor its order can change
+    std::shared_ptr<const PossibleGadgets> get_possible_cached(const K& key, const bool* param_is_free, int nb_params){
+        // The values of free params are ignored, so they are not part of the query
+        possible_query_t query(0, tuple_to_array(key));
+        for( int p = 0; p < db_key_size<K>::value; p++ ){
+            if( param_is_free[p] ){
+                query.first |= 1u << p;
+                query.second[p] = 0;
+            }
+        }
+        auto it = _possible_cache.find(query);
+        if( it != _possible_cache.end() )
+            return it->second;
+        if( _possible_cache.size() >= POSSIBLE_CACHE_MAX )
+            _possible_cache.clear();
+        std::shared_ptr<const PossibleGadgets> res(get_possible(key, param_is_free, nb_params));
+        _possible_cache.emplace(query, res);
+        return res;
+    }
+
+    size_t possible_cache_size() const{
+        return _possible_cache.size();
+    }
+
     // True if get_possible() would return a gadget with the branch type
     // 'branch'. Stops at the first match and allocates nothing.
     bool has_possible(const K& key, const bool* param_is_free, int nb_params, BranchType branch) const{
@@ -134,6 +179,7 @@ public:
     }
 
     void clear(){
+        _possible_cache.clear();
         db.clear();
     }
 };
@@ -182,15 +228,15 @@ public:
     const vector<Gadget*>& get_int80();
 
     // Get gadgets with optional parameters
-    PossibleGadgets* get_possible_mov_cst(reg_t reg, cst_t cst, bool* param_is_free);
-    PossibleGadgets* get_possible_mov_reg(reg_t dst_reg, reg_t src_reg, bool* param_is_free);
-    PossibleGadgets* get_possible_amov_cst(reg_t dst_reg, reg_t src_reg, Op op, cst_t src_cst, bool* param_is_free);
-    PossibleGadgets* get_possible_amov_reg(reg_t dst_reg, reg_t src_reg1, Op op, reg_t src_reg2, bool* param_is_free);
-    PossibleGadgets* get_possible_load(reg_t dst_reg, reg_t addr_reg, cst_t offset, bool* param_is_free);
-    PossibleGadgets* get_possible_aload(reg_t dst_reg, Op op, reg_t addr_reg, cst_t offset, bool* param_is_free);
+    std::shared_ptr<const PossibleGadgets> get_possible_mov_cst(reg_t reg, cst_t cst, bool* param_is_free);
+    std::shared_ptr<const PossibleGadgets> get_possible_mov_reg(reg_t dst_reg, reg_t src_reg, bool* param_is_free);
+    std::shared_ptr<const PossibleGadgets> get_possible_amov_cst(reg_t dst_reg, reg_t src_reg, Op op, cst_t src_cst, bool* param_is_free);
+    std::shared_ptr<const PossibleGadgets> get_possible_amov_reg(reg_t dst_reg, reg_t src_reg1, Op op, reg_t src_reg2, bool* param_is_free);
+    std::shared_ptr<const PossibleGadgets> get_possible_load(reg_t dst_reg, reg_t addr_reg, cst_t offset, bool* param_is_free);
+    std::shared_ptr<const PossibleGadgets> get_possible_aload(reg_t dst_reg, Op op, reg_t addr_reg, cst_t offset, bool* param_is_free);
     PossibleGadgets* get_possible_jmp(reg_t jmp_reg, bool* param_is_free);
-    PossibleGadgets* get_possible_store(reg_t addr_reg, cst_t offset, reg_t src_reg, bool* param_is_free);
-    PossibleGadgets* get_possible_astore(reg_t addr_reg, cst_t offset, Op op, reg_t src_reg, bool* param_is_free);
+    std::shared_ptr<const PossibleGadgets> get_possible_store(reg_t addr_reg, cst_t offset, reg_t src_reg, bool* param_is_free);
+    std::shared_ptr<const PossibleGadgets> get_possible_astore(reg_t addr_reg, cst_t offset, Op op, reg_t src_reg, bool* param_is_free);
 
     // Is there a gadget with the branch type 'branch' that get_possible_*()
     // would return? (cheap, for checks before a search)

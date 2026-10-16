@@ -471,7 +471,7 @@ private:
     void _resolve_param(Param& param);
     void _resolve_all_params(node_t n);
     const vector<Gadget*>& _get_matching_gadgets(GadgetDB& db, node_t node);
-    PossibleGadgets* _get_possible_gadgets(GadgetDB& db, node_t n);
+    std::shared_ptr<const PossibleGadgets> _get_possible_gadgets(GadgetDB& db, node_t n);
     bool _may_match_gadgets(GadgetDB& db, node_t n);
     bool _check_strategy_constraints(Node& node, Arch* arch);
     bool _check_assigned_gadget_constraints(Node& node, Arch* arch);

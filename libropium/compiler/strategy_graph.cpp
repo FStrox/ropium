@@ -753,7 +753,7 @@ const vector<Gadget*>& StrategyGraph::_get_matching_gadgets(GadgetDB& db, node_t
 //   - add ecx, esi
 //   ... 
 
-PossibleGadgets* StrategyGraph::_get_possible_gadgets(GadgetDB& db, node_t n){
+std::shared_ptr<const PossibleGadgets> StrategyGraph::_get_possible_gadgets(GadgetDB& db, node_t n){
     Node& node = nodes[n];
     bool params_status[MAX_PARAMS];
     int p;
@@ -1002,8 +1002,8 @@ bool StrategyGraph::select_gadgets(GadgetDB& db, Constraint* constraint, Arch* a
 
     // 1. Try all possibilities for parameters
     if( node.has_free_param() ){
-        // Get possible gadgets
-        PossibleGadgets* possible = _get_possible_gadgets(db, node.id);
+        // Get possible gadgets (shared with the database's cache)
+        std::shared_ptr<const PossibleGadgets> possible = _get_possible_gadgets(db, node.id);
         const int nb = node.nb_params();
         // 2.a. Try all possible params
         for( const auto& pos: possible->gadgets ){
@@ -1047,12 +1047,10 @@ bool StrategyGraph::select_gadgets(GadgetDB& db, Constraint* constraint, Arch* a
                 }
                 // 3. Recursive call on next node 
                 if( select_gadgets(db, constraint, arch, dfs_idx+1)){
-                    delete possible; possible = nullptr;
                     return true;
                 }
             }
         }
-        delete possible; possible = nullptr;
     }else{
 
         // Check strategy constraints 
