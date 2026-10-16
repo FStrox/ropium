@@ -298,7 +298,7 @@ void notify_sigint_handled(){
 // iterations that take about a microsecond each
 #define SEARCH_DEADLINE_POLL_PERIOD 256
 
-static bool g_search_deadline_set = false;
+bool g_search_deadline_set = false;
 static bool g_search_deadline_reached = false;
 static unsigned int g_search_deadline_polls = 0;
 static std::chrono::steady_clock::time_point g_search_deadline;
@@ -323,10 +323,7 @@ bool is_search_deadline_reached(){
     return g_search_deadline_reached;
 }
 
-bool poll_search_deadline(){
-    if( !g_search_deadline_set ){
-        return false;
-    }
+bool poll_search_deadline_slow(){
     if( !g_search_deadline_reached && ++g_search_deadline_polls % SEARCH_DEADLINE_POLL_PERIOD != 0 ){
         return false;
     }

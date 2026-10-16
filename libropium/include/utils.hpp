@@ -165,10 +165,17 @@ void set_search_deadline(unsigned int timeout_ms); // 0 = no deadline
 void unset_search_deadline();
 // Reads the clock
 bool is_search_deadline_reached();
-// For hot loops: reads the clock only once every SEARCH_DEADLINE_POLL_PERIOD calls
-bool poll_search_deadline();
 // Whether a check has seen the deadline (does not read the clock)
 bool search_deadline_was_reached();
+
+// Implementation of poll_search_deadline() (not for direct use)
+extern bool g_search_deadline_set;
+bool poll_search_deadline_slow();
+// For hot loops: a single load when no deadline is set (the default), otherwise
+// reads the clock only once every SEARCH_DEADLINE_POLL_PERIOD calls
+inline bool poll_search_deadline(){
+    return g_search_deadline_set && poll_search_deadline_slow();
+}
 
 // Sets the search deadline for the lifetime of the object
 class SearchDeadlineScope{
