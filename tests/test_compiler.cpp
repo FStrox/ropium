@@ -7,6 +7,7 @@
 #include <sstream>
 #include <iomanip>
 #include <random>
+#include <set>
 #include <chrono>
 
 using std::cout;
@@ -320,6 +321,53 @@ namespace test{
             constr.keep_regs.add_keep_reg(X86_EAX);
             nb += _assert(!constr.check(two_addrs, &arch) && !constr.check_except_bad_bytes(two_addrs, &arch),
                 "check_except_bad_bytes() ignored keep_regs");
+            return nb;
+        }
+
+        // BadBytes against a plain std::set of bad bytes
+        unsigned int bad_bytes_bitmap(){
+            unsigned int nb = 0;
+            std::mt19937 rng(0xbadb); // Fixed seed: reproducible
+            BadBytes bad;
+
+            for( int round = 0; round < 50; round++ ){
+                std::set<unsigned char> model;
+                bool same = true;
+                // Empty, a few bytes (with duplicates), or almost all of them
+                // (not all 256: get_valid_byte() needs one valid byte)
+                int nb_bad = (round == 0) ? 0 : (round % 10 == 9) ? 255 : rng() % 8;
+                bad.clear();
+                while( (int)model.size() < nb_bad ){
+                    unsigned char byte = rng() % 256;
+                    model.insert(byte);
+                    bad.add_bad_byte(byte);
+                    if( rng() % 4 == 0 ){
+                        bad.add_bad_byte(byte); // Duplicate
+                    }
+                }
+                for( int b = 0; b < 0x100; b++ ){
+                    same = same && (bad.is_valid_byte(b) == (model.count(b) == 0));
+                }
+                for( int i = 0; i < 200; i++ ){
+                    addr_t addr = ((addr_t)rng() << 32) | rng();
+                    for( int octets : {4, 8} ){
+                        bool expected = true;
+                        for( int j = 0; j < octets; j++ ){
+                            expected = expected && (model.count((addr >> (8*j)) & 0xff) == 0);
+                        }
+                        same = same && (bad.is_valid_address(addr, octets) == expected);
+                    }
+                }
+                unsigned char highest_valid = 0xff;
+                while( model.count(highest_valid) ){
+                    highest_valid--;
+                }
+                same = same && (bad.get_valid_byte() == highest_valid);
+                same = same && (bad.get_valid_padding(4) == (addr_t)highest_valid * 0x01010101);
+                nb += _assert(same, QuickFmt() << "BadBytes differs from the reference set in round " << round >> QuickFmt::to_str);
+            }
+            bad.clear();
+            nb += _assert(bad.is_valid_address(0x0a0d0000, 4) && bad.is_valid_byte(0), "BadBytes::clear() kept bad bytes");
             return nb;
         }
 
@@ -711,6 +759,7 @@ void test_compiler(){
     total += search_deadline();
     total += search_limits();
     total += gadget_address_selection();
+    total += bad_bytes_bitmap();
     total += direct_match();
     total += indirect_match();
     total += function_call_x86();
