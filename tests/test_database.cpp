@@ -120,6 +120,33 @@ namespace test{
             return nb;
         }
 
+        // clear() deletes the gadgets, so it must empty every table: a table it
+        // forgets keeps dangling pointers that the next add() or lookup reads
+        unsigned int clear_db(){
+            unsigned int nb = 0;
+            ArchX86 arch;
+            GadgetDB db;
+            vector<RawGadget> raw;
+            raw.push_back(RawGadget(string("\xb8\x03\x00\x00\x00\xc3", 6), 0)); // mov eax, 3; ret
+            raw.push_back(RawGadget(string("\xff\xe0", 2), 1)); // jmp eax
+            raw.push_back(RawGadget(string("\x83\xC0\x03\xCD\x80", 5), 2)); // add eax, 3; int 0x80
+            raw.push_back(RawGadget(string("\x83\xC5\x20\x0F\x34", 5), 3)); // add ebp, 32; sysenter
+
+            for( int round = 0; round < 2; round++ ){
+                db.analyse_raw_gadgets(raw, &arch);
+                nb += _assert(db.get_mov_cst(X86_EAX, 3).size() == 1, "GadgetDB: expected one mov_cst gadget");
+                nb += _assert(db.get_jmp(X86_EAX).size() == 1, "GadgetDB: expected one jmp gadget");
+                nb += _assert(db.get_int80().size() == 1, "GadgetDB: expected one int80 gadget");
+                nb += _assert(db.get_syscall().size() == 1, "GadgetDB: expected one syscall gadget");
+                db.clear();
+                nb += _assert(db.get_mov_cst(X86_EAX, 3).empty(), "GadgetDB::clear() left mov_cst gadgets");
+                nb += _assert(db.get_jmp(X86_EAX).empty(), "GadgetDB::clear() left jmp gadgets");
+                nb += _assert(db.get_int80().empty(), "GadgetDB::clear() left int80 gadgets");
+                nb += _assert(db.get_syscall().empty(), "GadgetDB::clear() left syscall gadgets");
+            }
+            return nb;
+        }
+
     }
 }
 
@@ -136,6 +163,7 @@ void test_database(){
     total += base_db();
     total += classification();
     total += classification_x64();
+    total += clear_db();
     // Return res
     cout << "\t" << total << "/" << total << green << "\t\tOK" << def << endl;
 }

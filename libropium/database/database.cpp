@@ -354,6 +354,9 @@ void GadgetDB::clear(){
     aload.clear();
     store.clear();
     astore.clear();
+    jmp.clear();
+    syscall.clear();
+    int80.clear();
     for( auto g : all ){
         delete g;
     }
