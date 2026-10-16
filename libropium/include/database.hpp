@@ -54,9 +54,8 @@ public:
     vector<Gadget*>& get_gadgets(int i){return *(gadgets[i].second);};
     cst_t get_param(int i, int p){return gadgets[i].first[p];};
     PossibleGadgets(){};
-    PossibleGadgets(const PossibleGadgets& other){
-        gadgets = std::move(other.gadgets);
-    };
+    PossibleGadgets(const PossibleGadgets& other) = delete;
+    PossibleGadgets& operator=(const PossibleGadgets& other) = delete;
 };
 
 
@@ -81,14 +80,13 @@ public:
         }
     }
 
-    const vector<Gadget*>& get(K key){
-        typename unordered_map<K, vector<Gadget*>>::iterator it;
-        if( (it = db.find(key)) == db.end()){
-            db[key] = vector<Gadget*>{};
-            return db[key];
-        }else{
-            return it->second;
-        }
+    // A miss returns an empty list without adding the key: a search must not
+    // change the table, because a rehash reorders it, and get_possible()
+    // results keep that order between gadgets of equal size.
+    const vector<Gadget*>& get(const K& key) const{
+        static const vector<Gadget*> no_gadgets;
+        auto it = db.find(key);
+        return (it == db.end()) ? no_gadgets : it->second;
     }
     
     bool _check_key_match(const K& key1, const K& key2, bool* param_is_free, int nb_params){

@@ -147,10 +147,51 @@ namespace test{
             return nb;
         }
 
+        // A lookup miss must leave the table as it is: the gadget selection
+        // does millions of them, and a growing table rehashes, which changes
+        // the order of equal-size gadgets in get_possible() results
+        unsigned int lookup_miss_db(){
+            unsigned int nb = 0;
+            BaseDB<tuple<int, int>> db;
+            vector<Gadget*> gadgets;
+            for( int i = 0; i < 20; i++ ){
+                gadgets.push_back(new Gadget());
+                gadgets.back()->id = i;
+                // Same size: get_possible() keeps the table order between them
+                gadgets.back()->nb_instr = 1;
+                gadgets.back()->nb_instr_ir = 1;
+                db.add(make_tuple(i % 4, i), gadgets.back());
+            }
+            bool free_src[2] = {false, true};
+            PossibleGadgets* before = db.get_possible(make_tuple(1, 0), free_src, 2);
+            size_t size = db.db.size(), buckets = db.db.bucket_count();
+
+            for( int i = 0; i < 1000; i++ ){
+                nb += _assert(db.get(make_tuple(100 + i, i)).empty(), "BaseDB: lookup of a missing key returned gadgets");
+            }
+            nb += _assert(db.get(make_tuple(1, 5))[0] == gadgets[5], "BaseDB: failed to get a gadget after lookup misses");
+            nb += _assert(db.db.size() == size, "BaseDB: a lookup miss added a key");
+            nb += _assert(db.db.bucket_count() == buckets, "BaseDB: lookup misses rehashed the table");
+
+            PossibleGadgets* after = db.get_possible(make_tuple(1, 0), free_src, 2);
+            nb += _assert(before->gadgets.size() == 5 && after->gadgets.size() == before->gadgets.size(),
+                          "BaseDB: wrong get_possible() result size");
+            for( int i = 0; i < before->gadgets.size(); i++ ){
+                nb += _assert(after->gadgets[i].first == before->gadgets[i].first &&
+                              after->gadgets[i].second == before->gadgets[i].second,
+                              "BaseDB: get_possible() order changed after lookup misses");
+            }
+            delete before;
+            delete after;
+            for( Gadget* g : gadgets )
+                delete g;
+            return nb;
+        }
+
     }
 }
 
-using namespace test::database; 
+using namespace test::database;
 // All unit tests 
 void test_database(){
     unsigned int total = 0;
@@ -164,6 +205,7 @@ void test_database(){
     total += classification();
     total += classification_x64();
     total += clear_db();
+    total += lookup_miss_db();
     // Return res
     cout << "\t" << total << "/" << total << green << "\t\tOK" << def << endl;
 }
