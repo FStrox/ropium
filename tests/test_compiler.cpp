@@ -283,6 +283,22 @@ namespace test{
             task.add_initial_strategy(graphs[0]);
             nb += _assert_ropchain(task.compile(&arch, &db), "CompilerTask: couldn't find chain without deadline");
 
+            // Scheduling a gadget selection also stops at the deadline: a
+            // search can spend all its time there
+            graphs.clear();
+            query = "eax = ecx";
+            vector<ILInstruction> mov_instr = comp.parse(query);
+            comp.il_to_strategy(graphs, mov_instr[0]);
+            nb += _assert(graphs[0]->select_gadgets(db, nullptr, &arch), "Gadget selection failed for eax = ecx");
+            set_search_deadline(1);
+            _wait_ms(5);
+            is_search_deadline_reached();
+            nb += _assert(!graphs[0]->schedule_gadgets(), "Gadget scheduling ignored the search deadline");
+            unset_search_deadline();
+            nb += _assert(graphs[0]->schedule_gadgets(), "Gadget scheduling failed without deadline");
+            for( StrategyGraph* g : graphs )
+                delete g;
+
             return nb;
         }
 

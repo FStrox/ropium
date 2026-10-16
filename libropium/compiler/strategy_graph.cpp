@@ -1130,6 +1130,13 @@ void StrategyGraph::compute_interference_points(){
 
 bool StrategyGraph::_do_scheduling(int interference_idx){
     bool success = false;
+    // Scheduling tries both orders for every interference point, so one call
+    // can take hundreds of ms. Each step is a deadline poll: otherwise, when
+    // every gadget selection gets this far, the selection's own polls (and
+    // clock reads) are that far apart.
+    if( poll_search_deadline() ){
+        return false;
+    }
     if( interference_idx == interference_points.size() ){
         // All choices where made for interference edges, try to schedule
         return compute_dfs_scheduling();
