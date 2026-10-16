@@ -9,20 +9,21 @@ BINDINGS_FILE = ropium.so
 ## Basic default flags 
 CFLAGS ?=
 CXXFLAGS ?=
-CXXFLAGS ?=
 LDFLAGS ?=
 LDLIBS ?=
 LDLIBS += -lcapstone
 
 ## Flags for debug mode
+## (OPT, see the opt-in flags below, only applies to non-debug builds: DEBUG=1 wins)
 DEBUG ?= 0
+OPT ?= 2
 ifeq ($(DEBUG), 1)
 	CFLAGS += -g -O0
 	CXXFLAGS += -g -O0
 	LDFLAGS += -g
 else
-	CFLAGS += -O2
-	CXXFLAGS += -O2 -Wno-narrowing
+	CFLAGS += -O$(OPT)
+	CXXFLAGS += -O$(OPT) -Wno-narrowing
 endif
 
 ## Profiling with gprof (opt-in): make PROFILE=1 BINDINGS=0 bench
@@ -44,6 +45,29 @@ ifeq ($(BINDINGS), 1)
 	LDLIBS += `python3-config --libs`
 else
 	BINDINGS_RULE = 
+endif
+
+## Opt-in optimization flags (not used by default): make NATIVE=1 LTO=1 OPT=3
+##   NATIVE=1  -march=native: use the build CPU's instruction set (binaries may not run on other CPUs)
+##   LTO=1     link-time optimization (-flto=auto on compile and link lines)
+##   OPT=3     -O3 instead of -O2 in non-debug builds (DEBUG=1 wins and keeps -g -O0).
+##             `python3-config --cflags` above ends with its own -O2 and the last -O wins,
+##             so a non-default OPT is repeated after it.
+NATIVE ?= 0
+ifeq ($(NATIVE), 1)
+	CFLAGS += -march=native
+	CXXFLAGS += -march=native
+endif
+LTO ?= 0
+ifeq ($(LTO), 1)
+	CFLAGS += -flto=auto
+	CXXFLAGS += -flto=auto
+	LDFLAGS += -flto=auto
+endif
+ifneq ($(DEBUG), 1)
+ifneq ($(OPT), 2)
+	CXXFLAGS += -O$(OPT)
+endif
 endif
 
 SRCDIR=./libropium
