@@ -129,6 +129,31 @@ namespace test{
             return nb;
         }
 
+        // select_gadgets() skips the search when a node can't match any gadget
+        // because of its constant params or branch type: it must not skip a
+        // graph that has a selection
+        unsigned int early_fail_branch_type(){
+            unsigned int nb = 0;
+            Arch* arch = new ArchX86();
+            GadgetDB db;
+            vector<RawGadget> raw;
+            raw.push_back(RawGadget(string("\x89\xEB\xC3", 3), 1)); // mov ebx, ebp; ret
+            raw.push_back(RawGadget(string("\x89\xF5\xFF\xE0", 4), 2)); // mov ebp, esi; jmp eax
+            db.analyse_raw_gadgets(raw, arch);
+
+            BranchType branches[] = {BranchType::ANY, BranchType::JMP, BranchType::RET};
+            bool expected[] = {true, true, false};
+            for( int i = 0; i < 3; i++ ){
+                StrategyGraph* graph = _graph_mov_ebx_esi();
+                graph->nodes[0].branch_type = branches[i]; // mov X, esi
+                nb += _assert(graph->select_gadgets(db, nullptr, arch) == expected[i],
+                              "Gadget selection: wrong result for the branch type of mov X, esi");
+                delete graph;
+            }
+            delete arch;
+            return nb;
+        }
+
         unsigned int rules(){
             unsigned int nb = 0;
             Arch* arch = new ArchX86();
@@ -530,6 +555,7 @@ void test_strategy(){
         total += basic();
         total += rules();
         total += failed_selection_restores_state();
+        total += early_fail_branch_type();
         total += param_slots();
         total += test_generic_adjust_jmp();
         total += test_adjust_load();

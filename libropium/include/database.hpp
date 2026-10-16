@@ -63,6 +63,16 @@ public:
 int find_insert_index(vector<Gadget*>& gadget_list, Gadget* gadget);
 int find_insert_index_possible_gadgets(PossibleGadgets* possible, Gadget* gadget);
 
+// True if one of the gadgets can be used where 'branch' is required
+// (BranchType::ANY accepts every gadget, as constraint_branch_type() does)
+inline bool has_branch_type(const vector<Gadget*>& gadgets, BranchType branch){
+    for( Gadget* gadget : gadgets ){
+        if( branch == BranchType::ANY || gadget->branch_type == branch )
+            return true;
+    }
+    return false;
+}
+
 template<class K> 
 class BaseDB{
 public:
@@ -89,7 +99,7 @@ public:
         return (it == db.end()) ? no_gadgets : it->second;
     }
     
-    bool _check_key_match(const K& key1, const K& key2, bool* param_is_free, int nb_params){
+    bool _check_key_match(const K& key1, const K& key2, const bool* param_is_free, int nb_params) const{
         auto a1 = tuple_to_array(key1);
         auto a2 = tuple_to_array(key2);
         for( int p = 0; p < a1.size(); p++){
@@ -112,7 +122,17 @@ public:
         }
         return res;
     }
-    
+
+    // True if get_possible() would return a gadget with the branch type
+    // 'branch'. Stops at the first match and allocates nothing.
+    bool has_possible(const K& key, const bool* param_is_free, int nb_params, BranchType branch) const{
+        for( auto& it : db ){
+            if( _check_key_match(key, it.first, param_is_free, nb_params) && has_branch_type(it.second, branch))
+                return true;
+        }
+        return false;
+    }
+
     void clear(){
         db.clear();
     }
@@ -171,6 +191,17 @@ public:
     PossibleGadgets* get_possible_jmp(reg_t jmp_reg, bool* param_is_free);
     PossibleGadgets* get_possible_store(reg_t addr_reg, cst_t offset, reg_t src_reg, bool* param_is_free);
     PossibleGadgets* get_possible_astore(reg_t addr_reg, cst_t offset, Op op, reg_t src_reg, bool* param_is_free);
+
+    // Is there a gadget with the branch type 'branch' that get_possible_*()
+    // would return? (cheap, for checks before a search)
+    bool has_possible_mov_cst(reg_t reg, cst_t cst, const bool* param_is_free, BranchType branch);
+    bool has_possible_mov_reg(reg_t dst_reg, reg_t src_reg, const bool* param_is_free, BranchType branch);
+    bool has_possible_amov_cst(reg_t dst_reg, reg_t src_reg, Op op, cst_t src_cst, const bool* param_is_free, BranchType branch);
+    bool has_possible_amov_reg(reg_t dst_reg, reg_t src_reg1, Op op, reg_t src_reg2, const bool* param_is_free, BranchType branch);
+    bool has_possible_load(reg_t dst_reg, reg_t addr_reg, cst_t offset, const bool* param_is_free, BranchType branch);
+    bool has_possible_aload(reg_t dst_reg, Op op, reg_t addr_reg, cst_t offset, const bool* param_is_free, BranchType branch);
+    bool has_possible_store(reg_t addr_reg, cst_t offset, reg_t src_reg, const bool* param_is_free, BranchType branch);
+    bool has_possible_astore(reg_t addr_reg, cst_t offset, Op op, reg_t src_reg, const bool* param_is_free, BranchType branch);
 
     // Clear
     void clear();

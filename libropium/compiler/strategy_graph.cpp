@@ -814,6 +814,69 @@ PossibleGadgets* StrategyGraph::_get_possible_gadgets(GadgetDB& db, node_t n){
     }
 }
 
+// Returns false if no gadget can be selected for node 'n', whatever values its
+// free and dependent params take: only its constant params and its branch
+// type are compared with the database. Can be called before any parameter is
+// resolved.
+bool StrategyGraph::_may_match_gadgets(GadgetDB& db, node_t n){
+    Node& node = nodes[n];
+    bool any_value[MAX_PARAMS];
+    const int nb = node.nb_params();
+    for( int p = 0; p < nb; p++){
+        any_value[p] = node.params[p].is_free() || node.params[p].is_dependent();
+    }
+    switch( node.type ){
+        case GadgetType::MOV_REG:
+            return db.has_possible_mov_reg(node.params[PARAM_MOVREG_DST_REG].value,
+                                           node.params[PARAM_MOVREG_SRC_REG].value,
+                                           any_value, node.branch_type);
+        case GadgetType::AMOV_REG:
+            return db.has_possible_amov_reg(node.params[PARAM_AMOVREG_DST_REG].value,
+                                           node.params[PARAM_AMOVREG_SRC_REG1].value,
+                                           (Op)node.params[PARAM_AMOVREG_SRC_OP].value,
+                                           node.params[PARAM_AMOVREG_SRC_REG2].value,
+                                           any_value, node.branch_type);
+        case GadgetType::MOV_CST:
+            return db.has_possible_mov_cst(node.params[PARAM_MOVCST_DST_REG].value,
+                                           node.params[PARAM_MOVCST_SRC_CST].value,
+                                           any_value, node.branch_type);
+        case GadgetType::AMOV_CST:
+            return db.has_possible_amov_cst(node.params[PARAM_AMOVCST_DST_REG].value,
+                                           node.params[PARAM_AMOVCST_SRC_REG].value,
+                                           (Op)node.params[PARAM_AMOVCST_SRC_OP].value,
+                                           node.params[PARAM_AMOVCST_SRC_CST].value,
+                                           any_value, node.branch_type);
+        case GadgetType::LOAD:
+            return db.has_possible_load(node.params[PARAM_LOAD_DST_REG].value,
+                                        node.params[PARAM_LOAD_SRC_ADDR_REG].value,
+                                        node.params[PARAM_LOAD_SRC_ADDR_OFFSET].value,
+                                        any_value, node.branch_type);
+        case GadgetType::ALOAD:
+            return db.has_possible_aload(node.params[PARAM_ALOAD_DST_REG].value,
+                                        (Op)node.params[PARAM_ALOAD_OP].value,
+                                        node.params[PARAM_ALOAD_SRC_ADDR_REG].value,
+                                        node.params[PARAM_ALOAD_SRC_ADDR_OFFSET].value,
+                                        any_value, node.branch_type);
+        case GadgetType::STORE:
+            return db.has_possible_store(node.params[PARAM_STORE_DST_ADDR_REG].value,
+                                        node.params[PARAM_STORE_DST_ADDR_OFFSET].value,
+                                        node.params[PARAM_STORE_SRC_REG].value,
+                                        any_value, node.branch_type);
+        case GadgetType::ASTORE:
+            return db.has_possible_astore(node.params[PARAM_ASTORE_DST_ADDR_REG].value,
+                                        node.params[PARAM_ASTORE_DST_ADDR_OFFSET].value,
+                                        (Op)node.params[PARAM_ASTORE_OP].value,
+                                        node.params[PARAM_ASTORE_SRC_REG].value,
+                                        any_value, node.branch_type);
+        case GadgetType::SYSCALL:
+            return has_branch_type(db.get_syscall(), node.branch_type);
+        case GadgetType::INT80:
+            return has_branch_type(db.get_int80(), node.branch_type);
+        default:
+            return true; // Let the search report unsupported nodes
+    }
+}
+
 // Must be checked after parameter resolution
 bool StrategyGraph::_check_strategy_constraints(Node& node, Arch* arch){
     for( constraint_callback_t constr : node.strategy_constraints ){
@@ -901,6 +964,16 @@ bool StrategyGraph::select_gadgets(GadgetDB& db, Constraint* constraint, Arch* a
         compute_dfs_params();
         compute_dfs_strategy();
         params_ctx = VarContext(); // New context for params
+        // If a node can't match any gadget the search can only fail, often
+        // after trying every candidate of the nodes before it: skip it. The
+        // result is the same, since a failed search leaves the graph as it
+        // was and lookups don't change the database.
+        for( Node& node : nodes ){
+            if( !node.is_disabled && !_may_match_gadgets(db, node.id) ){
+                has_gadget_selection = false;
+                return false;
+            }
+        }
         SelectionState saved;
         _save_selection_state(saved);
         has_gadget_selection = select_gadgets(db, constraint, arch, 0);

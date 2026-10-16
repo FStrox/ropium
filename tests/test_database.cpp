@@ -188,6 +188,65 @@ namespace test{
             return nb;
         }
 
+        // Reference for has_possible_*(): does get_possible_*() return a
+        // gadget with the right branch type?
+        bool _possible_has_branch(PossibleGadgets* possible, BranchType branch){
+            bool res = false;
+            for( auto& pos : possible->gadgets )
+                for( Gadget* g : *(pos.second) )
+                    res = res || branch == BranchType::ANY || g->branch_type == branch;
+            delete possible;
+            return res;
+        }
+
+        unsigned int has_possible_db(){
+            unsigned int nb = 0;
+            ArchX86 arch;
+            GadgetDB db;
+            vector<RawGadget> raw;
+            raw.push_back(RawGadget(string("\x89\xf9\xbb\x01\x00\x00\x00\xc3", 8), 0)); // mov ecx, edi; mov ebx, 1; ret
+            raw.push_back(RawGadget(string("\x89\xC3\xC3", 3), 1)); // mov ebx, eax; ret
+            raw.push_back(RawGadget(string("\x89\xF5\xFF\xE0", 4), 2)); // mov ebp, esi; jmp eax
+            raw.push_back(RawGadget(string("\x8b\x59\xf7\x89\xd8\xc3", 6), 3)); // mov ebx, [ecx-9]; mov eax, ebx; ret
+            raw.push_back(RawGadget(string("\x8B\x4F\x04\xFF\xE0", 5), 4)); // mov ecx, [edi+4]; jmp eax
+            raw.push_back(RawGadget(string("\x58\x5e\xc3", 3), 5)); // pop eax; pop esi; ret
+            db.analyse_raw_gadgets(raw, &arch);
+            size_t mov_reg_keys = db.mov_reg.db.size(), load_keys = db.load.db.size();
+
+            BranchType branches[] = {BranchType::ANY, BranchType::RET, BranchType::JMP};
+            cst_t offsets[] = {-9, 0, 4, 8};
+            bool is_free[3];
+            for( BranchType branch : branches ){
+                for( int mask = 0; mask < 8; mask++ ){
+                    for( int p = 0; p < 3; p++ )
+                        is_free[p] = mask & (1 << p);
+                    for( reg_t r1 = X86_EAX; r1 <= X86_EIP; r1++ ){
+                        for( reg_t r2 = X86_EAX; r2 <= X86_EIP; r2++ ){
+                            if( mask < 4 ){
+                                nb += _assert(db.has_possible_mov_reg(r1, r2, is_free, branch) ==
+                                              _possible_has_branch(db.get_possible_mov_reg(r1, r2, is_free), branch),
+                                              "GadgetDB: has_possible_mov_reg() disagrees with get_possible_mov_reg()");
+                            }
+                            for( cst_t offset : offsets ){
+                                nb += _assert(db.has_possible_load(r1, r2, offset, is_free, branch) ==
+                                              _possible_has_branch(db.get_possible_load(r1, r2, offset, is_free), branch),
+                                              "GadgetDB: has_possible_load() disagrees with get_possible_load()");
+                            }
+                        }
+                    }
+                }
+            }
+            // A few known answers, so that both functions can't be wrong the same way
+            bool src_free[2] = {false, true}, dst_free[2] = {true, false};
+            nb += _assert(db.has_possible_mov_reg(X86_EBX, X86_EAX, src_free, BranchType::RET), "GadgetDB: missed mov ebx, X");
+            nb += _assert(!db.has_possible_mov_reg(X86_EDX, X86_EAX, src_free, BranchType::ANY), "GadgetDB: found mov edx, X");
+            nb += _assert(db.has_possible_mov_reg(X86_EBP, X86_ESI, dst_free, BranchType::JMP), "GadgetDB: missed mov X, esi; jmp");
+            nb += _assert(!db.has_possible_mov_reg(X86_EBP, X86_ESI, dst_free, BranchType::RET), "GadgetDB: found mov X, esi; ret");
+            nb += _assert(db.mov_reg.db.size() == mov_reg_keys && db.load.db.size() == load_keys,
+                          "GadgetDB: has_possible_*() or get_possible_*() added keys");
+            return nb;
+        }
+
     }
 }
 
@@ -206,6 +265,7 @@ void test_database(){
     total += classification_x64();
     total += clear_db();
     total += lookup_miss_db();
+    total += has_possible_db();
     // Return res
     cout << "\t" << total << "/" << total << green << "\t\tOK" << def << endl;
 }
