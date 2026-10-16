@@ -5,6 +5,7 @@
 #include <iostream>
 #include <string>
 #include <sstream>
+#include <set>
 #include <iomanip>
 
 using std::cout;
@@ -293,6 +294,29 @@ namespace test{
             nb += _assert( copy.id() == ctx.id(), "Copied context has a different id");
             copy.set("var1", 4);
             nb += _assert( copy.id() != ctx.id(), "Modified copy kept the id of the original");
+
+            // Copies of one state (copy-constructed or assigned) must not take
+            // the same next id
+            VarContext a;
+            a.set("var1", 1);
+            VarContext b(a), c;
+            c = a;
+            b.set("var1", 2);
+            c.set("var1", 3);
+            a.set("var1", 4);
+            nb += _assert( a.id() != b.id() && b.id() != c.id() && a.id() != c.id(), "Copies of a context reused an id");
+
+            // Ids stay unique past the end of a context's block of ids
+            std::set<varctx_id_t> ids;
+            VarContext d, e;
+            varslot_t slot = var_slot("var1");
+            for( int i = 0; i < 70000; i++ ){
+                d.set_slot(slot, i);
+                ids.insert(d.id());
+                e.set_slot(slot, i);
+                ids.insert(e.id());
+            }
+            nb += _assert( ids.size() == 140000, "Two contexts reused an id");
             return nb;
         }
 

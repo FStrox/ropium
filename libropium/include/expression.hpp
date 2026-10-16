@@ -402,9 +402,11 @@ variable is added, removed, or changes value. Equal ids therefore always
 mean equal variable values, even across different contexts. Setting a
 variable to the value it already has keeps the id so that cached
 concretizations stay valid. A copied context keeps the id of the original
-until one of them is modified. */
-varctx_id_t new_varctx_id();
+until one of them is modified.
 
+To keep changes cheap, a context reserves a block of ids from the global
+counter and takes the next one from it on each change. A copy gets no ids
+from the original's block: it reserves its own block on its first change. */
 class VarContext{
     struct Var{
         cst_t value;
@@ -412,15 +414,28 @@ class VarContext{
     };
     vector<Var> _vars; // Indexed by variable slot
     varctx_id_t _id;
+    // Ids in [_next_id, _end_id) are reserved for this object only
+    varctx_id_t _next_id;
+    varctx_id_t _end_id;
+
+    void _grow(varslot_t slot);
+    void _reserve_ids();
+    void _new_id(){
+        if( _next_id == _end_id ){
+            _reserve_ids();
+        }
+        _id = _next_id++;
+    }
     [[noreturn]] void _throw_unknown_var(varslot_t slot) const;
 public:
     VarContext();
+    VarContext(const VarContext& other);
+    VarContext& operator=(const VarContext& other);
     varctx_id_t id() const { return _id; }
 
     void set_slot(varslot_t slot, cst_t value){
         if( slot >= _vars.size() ){
-            // size_t: VARSLOT_NONE + 1 must not wrap to 0
-            _vars.resize(static_cast<size_t>(slot) + 1, Var{0, false});
+            _grow(slot);
         }
         Var& var = _vars[slot];
         if( var.is_set && var.value == value ){
@@ -428,7 +443,7 @@ public:
         }
         var.value = value;
         var.is_set = true;
-        _id = new_varctx_id();
+        _new_id();
     }
 
     cst_t get_slot(varslot_t slot) const {

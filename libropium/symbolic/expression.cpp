@@ -1079,15 +1079,34 @@ size_t var_slot_count(){
 }
 
 // Process-wide so that two contexts never share an id (see VarContext in
-// expression.hpp). 64 bits cannot wrap during a search. Relaxed ordering is
+// expression.hpp). Contexts take ids from it by blocks. 64 bits cannot wrap:
+// even one block per context allows 2^48 contexts. Relaxed ordering is
 // enough: only the uniqueness of the returned values matters.
 static std::atomic<varctx_id_t> next_varctx_id(VARCTX_ID_NONE + 1);
+static const varctx_id_t VARCTX_ID_BLOCK = 1 << 16;
 
-varctx_id_t new_varctx_id(){
-    return next_varctx_id.fetch_add(1, std::memory_order_relaxed);
+VarContext::VarContext(): _next_id(0), _end_id(0){
+    _new_id();
 }
 
-VarContext::VarContext(): _id(new_varctx_id()){}
+VarContext::VarContext(const VarContext& other): _vars(other._vars), _id(other._id), _next_id(0), _end_id(0){}
+
+VarContext& VarContext::operator=(const VarContext& other){
+    _vars = other._vars;
+    _id = other._id;
+    // Keep the ids reserved by this object: nobody else can use them
+    return *this;
+}
+
+void VarContext::_reserve_ids(){
+    _next_id = next_varctx_id.fetch_add(VARCTX_ID_BLOCK, std::memory_order_relaxed);
+    _end_id = _next_id + VARCTX_ID_BLOCK;
+}
+
+void VarContext::_grow(varslot_t slot){
+    // size_t: VARSLOT_NONE + 1 must not wrap to 0
+    _vars.resize(static_cast<size_t>(slot) + 1, Var{0, false});
+}
 
 [[noreturn]] static void throw_unknown_var(const string& name){
     throw expression_exception(QuickFmt() << "Trying to access variable '"
@@ -1114,7 +1133,7 @@ void VarContext::remove(const string& name){
     varslot_t slot;
     if( find_var_slot(name, slot) && slot < _vars.size() && _vars[slot].is_set ){
         _vars[slot].is_set = false;
-        _id = new_varctx_id();
+        _new_id();
     }
 }
 
