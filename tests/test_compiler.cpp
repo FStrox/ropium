@@ -285,6 +285,44 @@ namespace test{
             return nb;
         }
 
+        // Gadget selection picks the first address without bad bytes, rejects a
+        // gadget that has none without throwing, and then only needs the
+        // constraint checks other than bad bytes
+        unsigned int gadget_address_selection(){
+            unsigned int nb = 0;
+            ArchX86 arch;
+            GadgetDB db;
+            Constraint constr;
+            vector<RawGadget> raw;
+            raw.push_back(RawGadget(string("\x89\xC8\xC3", 3), 0x0a0b0c0d)); // mov eax, ecx; ret
+            raw.push_back(RawGadget(string("\x89\xC8\xC3", 3), 0x01020304)); // same gadget, second address
+            raw.push_back(RawGadget(string("\x89\xD8\xC3", 3), 0x0102030a)); // mov eax, ebx; ret
+            db.analyse_raw_gadgets(raw, &arch);
+            Gadget* two_addrs = db.get_mov_reg(X86_EAX, X86_ECX).at(0);
+            Gadget* one_addr = db.get_mov_reg(X86_EAX, X86_EBX).at(0);
+            Node node(0, GadgetType::MOV_REG);
+            const int addr_param = node.get_param_num_gadget_addr();
+            constr.bad_bytes.add_bad_byte(0x0a);
+            constr.mem_safety.add_safe_reg(X86_ESP); // As ROPCompiler::compile() does ('ret' reads [esp])
+
+            nb += _assert(two_addrs->addresses.size() == 2, "Expected one gadget with two addresses");
+            nb += _assert(node.assign_gadget(two_addrs, &arch, &constr), "assign_gadget() rejected a gadget with a valid address");
+            nb += _assert(node.params[addr_param].value == 0x01020304, "assign_gadget() picked an address with bad bytes");
+            nb += _assert(!node.assign_gadget(one_addr, &arch, &constr), "assign_gadget() accepted an address with bad bytes");
+            nb += _assert(node.assign_gadget(one_addr, &arch, nullptr) && node.params[addr_param].value == 0x0102030a,
+                "assign_gadget() without constraint should take the first address");
+
+            // check() = bad bytes + check_except_bad_bytes()
+            nb += _assert(!constr.check(one_addr, &arch) && constr.check_except_bad_bytes(one_addr, &arch),
+                "check_except_bad_bytes() should ignore bad bytes only");
+            nb += _assert(constr.check(two_addrs, &arch) && constr.check_except_bad_bytes(two_addrs, &arch),
+                "Constraint checks rejected a valid gadget");
+            constr.keep_regs.add_keep_reg(X86_EAX);
+            nb += _assert(!constr.check(two_addrs, &arch) && !constr.check_except_bad_bytes(two_addrs, &arch),
+                "check_except_bad_bytes() ignored keep_regs");
+            return nb;
+        }
+
         unsigned int direct_match(){
             unsigned int nb = 0;
             ArchX86 arch;
@@ -672,6 +710,7 @@ void test_compiler(){
     total += strategy_queue_equivalence();
     total += search_deadline();
     total += search_limits();
+    total += gadget_address_selection();
     total += direct_match();
     total += indirect_match();
     total += function_call_x86();

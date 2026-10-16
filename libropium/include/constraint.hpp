@@ -50,6 +50,9 @@ public:
 
     void clear();
     bool check(Gadget* gadget, Arch* arch, Assertion* assertion = nullptr);
+    // check() without the bad bytes test, for a gadget whose address was
+    // already chosen with these bad bytes (Node::assign_gadget())
+    bool check_except_bad_bytes(Gadget* gadget, Arch* arch, Assertion* assertion = nullptr);
 };
 
 #endif

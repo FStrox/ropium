@@ -303,19 +303,22 @@ bool Node::modifies_reg(int reg_num){
         return (affected_gadget->modified_regs[reg_num]);
 }
 
-addr_t _get_valid_gadget_address(Gadget* gadget, Arch* arch, Constraint* constraint){
-    for( addr_t addr : gadget->addresses){
-        if( !constraint || constraint->bad_bytes.is_valid_address(addr, arch->octets))
-            return addr;
+// Get the first address of 'gadget' without bad bytes. Returns false if
+// there is none. It runs for every candidate gadget of the gadget selection,
+// so it doesn't throw.
+static bool _get_valid_gadget_address(Gadget* gadget, Arch* arch, Constraint* constraint, addr_t& addr){
+    for( addr_t a : gadget->addresses){
+        if( !constraint || constraint->bad_bytes.is_valid_address(a, arch->octets)){
+            addr = a;
+            return true;
+        }
     }
-    throw strategy_exception("Fatal error: couldn't get valid gadget address. This should not happen ! ");
+    return false;
 }
 
 bool Node::assign_gadget(Gadget* gadget, Arch* arch, Constraint* constraint){
     addr_t addr;
-    try{
-        addr = _get_valid_gadget_address(gadget, arch, constraint);
-    }catch(strategy_exception& e){
+    if( !_get_valid_gadget_address(gadget, arch, constraint, addr) ){
         return false;
     }
 
@@ -925,8 +928,9 @@ bool StrategyGraph::select_gadgets(GadgetDB& db, Constraint* constraint, Arch* a
                 // on gadget specific parameters such as gadget_addr, gadget_sp_inc, etc)
                 _resolve_all_params(node.id);
 
-                // Check assigned gadget constraints and global constraint
-                if( !_check_assigned_gadget_constraints(node, arch) || (constraint && !constraint->check(gadget, arch, &node.assertion))){
+                // Check assigned gadget constraints and global constraint (assign_gadget()
+                // already chose an address without bad bytes)
+                if( !_check_assigned_gadget_constraints(node, arch) || (constraint && !constraint->check_except_bad_bytes(gadget, arch, &node.assertion))){
                     continue;
                 }
                 // 3. Recursive call on next node 
@@ -963,8 +967,9 @@ bool StrategyGraph::select_gadgets(GadgetDB& db, Constraint* constraint, Arch* a
                 // Prepare assertion for current parameter choice
                 node.apply_assertion();
 
-                // Check assigned gadget constraints and global constraint
-                if( !_check_assigned_gadget_constraints(node, arch) || (constraint && !constraint->check(gadget, arch, &node.assertion))){
+                // Check assigned gadget constraints and global constraint (assign_gadget()
+                // already chose an address without bad bytes)
+                if( !_check_assigned_gadget_constraints(node, arch) || (constraint && !constraint->check_except_bad_bytes(gadget, arch, &node.assertion))){
                     continue;
                 }
                 // 3. Recursive call on next node

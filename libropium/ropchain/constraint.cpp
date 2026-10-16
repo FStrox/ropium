@@ -134,6 +134,10 @@ void Constraint::clear(){
 
 bool Constraint::check(Gadget* gadget, Arch* arch, Assertion* assertion){
     return  bad_bytes.check(gadget, arch->octets) &&
-            keep_regs.check(gadget) &&
+            check_except_bad_bytes(gadget, arch, assertion);
+}
+
+bool Constraint::check_except_bad_bytes(Gadget* gadget, Arch* arch, Assertion* assertion){
+    return  keep_regs.check(gadget) &&
             mem_safety.check(gadget, arch->nb_regs, assertion);
 }
