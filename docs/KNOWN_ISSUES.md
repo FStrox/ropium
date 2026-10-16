@@ -1,7 +1,7 @@
 # Known issues
 
 This page lists the bugs and limitations found during a full code review of the `perf/ropchain-performance`
-branch (October 2026, HEAD `aae2a1c`). None of them is fixed yet. Each entry gives the location and how it
+branch (October 2026, HEAD `9f5b279`). None of them is fixed yet. Each entry gives the location and how it
 was confirmed:
 
 - **reproduced**: run against the built library or Python module, on the bundled samples or on a small

@@ -1,7 +1,7 @@
 {
  "format": 1,
  "metadata": {
-  "git_commit": "98e199691aeec12ea13ac8e4d38b4d8cb2486991",
+  "git_commit": "b9d146fcec0bf5e12bdbeb7ad346a4f2453bca4a",
   "git_branch": "perf/ropchain-performance",
   "git_dirty": {
    "libropium": false,
@@ -97,7 +97,7 @@
   "determinism_check": {
    "compared_with": "/tmp/claude-1000/-home-kali-Repository-ropium/5e8ad4aa-cc66-4646-84f2-73c76871dc63/scratchpad/perf_baseline_run2.json",
    "other_date": "2026-10-15T17:36:53+00:00",
-   "other_git_commit": "98e199691aeec12ea13ac8e4d38b4d8cb2486991",
+   "other_git_commit": "b9d146fcec0bf5e12bdbeb7ad346a4f2453bca4a",
    "other_total_wall_s": 1367.7,
    "identical": true,
    "n_cases_compared": 96,
@@ -107,8 +107,8 @@
    {
     "cases": "badbytes_nonull (24)",
     "date": "2026-10-15T19:28:49+00:00",
-    "git_commit": "3108dde258b0966be8fee72ef55edddf52b2cd2e",
-    "note": "library sources identical to git_commit above (3108dde only adds Makefile PROFILE/bench and tests/bench); captured with the same ropium.so (sha256 above), caps and gadget files",
+    "git_commit": "8175df9c0c3c2c756fb2b0dec63532b3ae34f3ca",
+    "note": "library sources identical to git_commit above (8175df9 only adds Makefile PROFILE/bench and tests/bench); captured with the same ropium.so (sha256 above), caps and gadget files",
     "counts": {
      "FOUND": 11,
      "NONE": 12,
@@ -8649,7 +8649,7 @@
  "timing": {
   "baseline": {
    "metadata": {
-    "git_commit": "16fd2b1ca766250640892aba7110ce14698783bd",
+    "git_commit": "be56d7aac6f635680bf8eacad35e20dde4b2d4bf",
     "git_branch": "perf/ropchain-performance",
     "git_dirty": {
      "libropium": false,

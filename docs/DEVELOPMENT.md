@@ -101,7 +101,7 @@ process exits 1 at the first failed assertion.
 
 Each case runs in a fresh Python subprocess, in its own temporary directory, with a CPU-time cap.
 `tests/perf_baseline.json` holds the reference outcome (FOUND / NONE / TIMEOUT) and the raw chain bytes,
-captured from master `98e1996`.
+captured from master `b9d146f`.
 
 ```bash
 python3 tests/perf_baseline.py verify --skip-timeouts --jobs 3     # ~2 min: outcomes + byte-identical chains
@@ -115,7 +115,7 @@ python3 tests/perf_baseline.py timing --label mine --out /tmp/timing.json
 - Never re-capture the fixture to make a diff go away: a chain that changes means the search changed. The
   only legitimate reasons are an intended behavior change or a bug fix, which must be explained. `capture`
   refuses to overwrite the fixture without `--force`.
-- The fixture records the behavior of master `98e1996`, bugs included: the two `efssetup|...|[eax + 8] = ebx`
+- The fixture records the behavior of master `b9d146f`, bugs included: the two `efssetup|...|[eax + 8] = ebx`
   reference chains use a mis-analysed `pushal` gadget ([KNOWN_ISSUES 1.1](KNOWN_ISSUES.md#1-chains-that-are-wrong-at-runtime)).
   A fix for that issue is expected to change them.
 - `timing` without `--out` writes its results **into the tracked fixture**; pass `--out`.
