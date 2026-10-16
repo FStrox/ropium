@@ -455,16 +455,13 @@ The most important ones (full list with details in [docs/KNOWN_ISSUES.md](docs/K
 Building, unit tests, the chain regression fixture, profiling and the rules for changing the search are
 described in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
-# Contact
-
-**Boyan MILANOV** - boyan.milanov (at) hotmail (dot) fr
-
 # Licence
 ROPium is provided under the MIT licence.
 
 # Special thanks
 Contributors:
    -  Docker container support: [migounette](https://github.com/migounette), [clslgrnc](https://github.com/clslgrnc)
+   -  rp++ file upload integration [7homasSutter](https://github.com/7homasSutter)
 
 ROPium uses the following awesome projects:
    - [capstone](https://github.com/aquynh/capstone) : Disassembly Framework
