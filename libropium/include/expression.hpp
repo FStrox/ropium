@@ -7,6 +7,7 @@
 #include <memory>
 #include <ostream>
 #include <map>
+#include <unordered_map>
 #include "exception.hpp"
 
 using std::string;
@@ -14,6 +15,7 @@ using std::vector;
 using std::shared_ptr;
 using std::ostream;
 using std::map;
+using std::unordered_map;
 
 /* Type aliasing */
 typedef uint16_t exprsize_t ;
@@ -21,6 +23,25 @@ typedef uint32_t hash_t;
 typedef int64_t cst_t;
 typedef uint64_t ucst_t;
 typedef ucst_t addr_t;
+typedef uint64_t varctx_id_t;
+typedef uint32_t varslot_t;
+
+// Never used as a VarContext id, means "no cached concretization"
+const varctx_id_t VARCTX_ID_NONE = 0;
+// Never a valid variable slot, means "not looked up yet"
+const varslot_t VARSLOT_NONE = UINT32_MAX;
+
+/* Variable slots
+   ==============
+Every distinct variable name gets a small integer slot, the same for the whole
+process and never released. VarContext stores values in an array indexed by
+slot, so setting or reading a variable is an array access instead of a
+string-keyed lookup. Names are looked up once and their slot is cached by the
+objects that use them (ExprVar, Param). The table is thread-safe. */
+varslot_t var_slot(const string& name); // Adds the name if it is new
+bool find_var_slot(const string& name, varslot_t& slot); // Doesn't add it
+const string& var_slot_name(varslot_t slot);
+size_t var_slot_count();
 
 /* Types of expressions
    ====================
@@ -104,7 +125,7 @@ protected:
     hash_t _hash;
     // Concrete
     cst_t _concrete;
-    int _concrete_ctx_id;
+    varctx_id_t _concrete_ctx_id;
     // Simplification
     Expr _simplified_expr;
     bool _is_simplified;
@@ -122,7 +143,7 @@ public:
     virtual hash_t hash(){throw runtime_exception("Called virtual function in ExprObject base class!");};
     virtual cst_t cst(){throw runtime_exception("Called virtual function in ExprObject base class!");};
     virtual const string& name(){throw runtime_exception("Called virtual function in ExprObject base class!");};
-    virtual void replace_name(string& new_name){throw runtime_exception("Called virtual function in ExprObject base class!");};
+    virtual void replace_name(const string& new_name){throw runtime_exception("Called virtual function in ExprObject base class!");};
     virtual Op op(){throw runtime_exception("Called virtual function in ExprObject base class!");};
     virtual cst_t mode(){throw runtime_exception("Called virtual function in ExprObject base class!");};
     virtual void print(ostream& out){out << "???";};
@@ -151,7 +172,7 @@ public:
     bool inf(Expr other);
     
     /* Replace constants (used for dependencies) */
-    void replace_var_name(string& curr_name, string& new_name); 
+    void replace_var_name(const string& curr_name, const string& new_name);
     
     /* Copy */
     virtual Expr copy(){throw runtime_exception("Called virtual function in ExprObject base class!");};
@@ -170,8 +191,9 @@ public:
 };
 
 class ExprVar: public ExprObject{
-    const string _name;
+    string _name;
     int _num;
+    varslot_t _slot; // Slot of _name, looked up on first concretize()
 public:
     ExprVar(exprsize_t size, string name, int num=0);
     hash_t hash();
@@ -179,7 +201,7 @@ public:
     int reg();
     virtual cst_t concretize(VarContext* ctx=nullptr);
     const string& name();
-    void replace_name(string& new_name);
+    void replace_name(const string& new_name);
     virtual Expr copy();
     void print(ostream& out);
 };
@@ -370,16 +392,71 @@ cst_t cst_sign_extend(exprsize_t size, cst_t val);
 /* VarContext
    ==========
 A VarContext associates a list of concrete values to a list of variables.
-It used with the variables names as keys for lookup. */
+Values are stored by variable slot (see var_slot() above): the *_slot()
+methods are the fast path, the methods taking a name are wrappers.
+
+Expressions cache their concrete value together with the id() of the
+context it was computed in. Ids are unique in the whole process: a new id
+is drawn from a global counter when a context is created and each time a
+variable is added, removed, or changes value. Equal ids therefore always
+mean equal variable values, even across different contexts. Setting a
+variable to the value it already has keeps the id so that cached
+concretizations stay valid. A copied context keeps the id of the original
+until one of them is modified.
+
+To keep changes cheap, a context reserves a block of ids from the global
+counter and takes the next one from it on each change. A copy gets no ids
+from the original's block: it reserves its own block on its first change. */
 class VarContext{
-    map<string, cst_t> varmap;
+    struct Var{
+        cst_t value;
+        bool is_set;
+    };
+    vector<Var> _vars; // Indexed by variable slot
+    varctx_id_t _id;
+    // Ids in [_next_id, _end_id) are reserved for this object only
+    varctx_id_t _next_id;
+    varctx_id_t _end_id;
+
+    void _grow(varslot_t slot);
+    void _reserve_ids();
+    void _new_id(){
+        if( _next_id == _end_id ){
+            _reserve_ids();
+        }
+        _id = _next_id++;
+    }
+    [[noreturn]] void _throw_unknown_var(varslot_t slot) const;
 public:
-    int id;
-    VarContext(int id=0);
+    VarContext();
+    VarContext(const VarContext& other);
+    VarContext& operator=(const VarContext& other);
+    varctx_id_t id() const { return _id; }
+
+    void set_slot(varslot_t slot, cst_t value){
+        if( slot >= _vars.size() ){
+            _grow(slot);
+        }
+        Var& var = _vars[slot];
+        if( var.is_set && var.value == value ){
+            return; // Same value, cached concretizations are still valid
+        }
+        var.value = value;
+        var.is_set = true;
+        _new_id();
+    }
+
+    cst_t get_slot(varslot_t slot) const {
+        if( slot >= _vars.size() || !_vars[slot].is_set ){
+            _throw_unknown_var(slot);
+        }
+        return _vars[slot].value;
+    }
+
     void set(const string& name, cst_t value);
-    cst_t get(const string& name);
+    cst_t get(const string& name) const;
     void remove(const string& name);
-    void print(ostream& os);
+    void print(ostream& os) const;
 };
 
 ostream& operator<<(ostream& os, VarContext& c);

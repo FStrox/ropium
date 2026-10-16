@@ -5,15 +5,34 @@
 #include "arch.hpp"
 #include "assertion.hpp"
 #include <algorithm>
+#include <cstdint>
 
 class BadBytes{
-    vector<unsigned char> _bad_bytes;
+    // Bit b of the bitmap is set if byte b is bad. The gadget selection
+    // checks the bytes of every candidate gadget's address, so the checks
+    // are inline, with a fast path when no byte is bad.
+    uint64_t _bitmap[4];
+    bool _has_bad_bytes;
 public:
+    BadBytes();
     void add_bad_byte(unsigned char byte);
     void clear();
-    bool is_valid_byte(unsigned char byte);
+    bool is_valid_byte(unsigned char byte) const {
+        return !((_bitmap[byte >> 6] >> (byte & 63)) & 1);
+    }
     unsigned char get_valid_byte();
-    bool is_valid_address(addr_t addr, int arch_bytes);
+    bool is_valid_address(addr_t addr, int arch_bytes) const {
+        if( !_has_bad_bytes ){
+            return true;
+        }
+        for( int i = 0; i < arch_bytes; i++){
+            if( ! is_valid_byte(addr & 0xff)){
+                return false;
+            }
+            addr >>= 8;
+        }
+        return true;
+    }
     addr_t get_valid_padding(int arch_bytes);
     addr_t get_valid_address(Gadget* gadget, int nb_bytes);
     bool check(Gadget* gadget, int arch_bytes);
@@ -50,6 +69,9 @@ public:
 
     void clear();
     bool check(Gadget* gadget, Arch* arch, Assertion* assertion = nullptr);
+    // check() without the bad bytes test, for a gadget whose address was
+    // already chosen with these bad bytes (Node::assign_gadget())
+    bool check_except_bad_bytes(Gadget* gadget, Arch* arch, Assertion* assertion = nullptr);
 };
 
 #endif

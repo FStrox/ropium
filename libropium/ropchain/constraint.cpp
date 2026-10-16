@@ -4,16 +4,18 @@
 
 /* =============== Bad Bytes ================= */
 
+BadBytes::BadBytes(){
+    clear();
+}
+
 void BadBytes::add_bad_byte(unsigned char byte){
-    _bad_bytes.push_back(byte);
+    _bitmap[byte >> 6] |= (uint64_t)1 << (byte & 63);
+    _has_bad_bytes = true;
 }
 
 void BadBytes::clear(){
-    _bad_bytes.clear();
-}
-
-bool BadBytes::is_valid_byte(unsigned char byte){
-    return (std::find(_bad_bytes.begin(), _bad_bytes.end(), byte) == _bad_bytes.end());
+    memset(_bitmap, 0, sizeof(_bitmap));
+    _has_bad_bytes = false;
 }
 
 unsigned char BadBytes::get_valid_byte(){
@@ -32,16 +34,6 @@ addr_t BadBytes::get_valid_padding(int nb_bytes){
         res = (res<<8) + byte;
     }
     return res;
-}
-
-bool BadBytes::is_valid_address(addr_t addr, int arch_bytes){
-    for( int i = 0; i < arch_bytes; i++){
-        if( ! is_valid_byte(addr & 0xff)){
-            return false;
-        }
-        addr >>= 8;
-    }
-    return true;
 }
 
 addr_t BadBytes::get_valid_address(Gadget* gadget, int arch_bytes){
@@ -134,6 +126,10 @@ void Constraint::clear(){
 
 bool Constraint::check(Gadget* gadget, Arch* arch, Assertion* assertion){
     return  bad_bytes.check(gadget, arch->octets) &&
-            keep_regs.check(gadget) &&
+            check_except_bad_bytes(gadget, arch, assertion);
+}
+
+bool Constraint::check_except_bad_bytes(Gadget* gadget, Arch* arch, Assertion* assertion){
+    return  keep_regs.check(gadget) &&
             mem_safety.check(gadget, arch->nb_regs, assertion);
 }

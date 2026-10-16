@@ -313,36 +313,70 @@ const vector<Gadget*>& GadgetDB::get_syscall(){
 
 /* ============== Get possible gadgets ===================== */
 
-PossibleGadgets* GadgetDB::get_possible_mov_reg(reg_t dst_reg, reg_t src_reg, bool* param_is_free){
-    return mov_reg.get_possible(make_tuple(dst_reg, src_reg), param_is_free, 2);
+std::shared_ptr<const PossibleGadgets> GadgetDB::get_possible_mov_reg(reg_t dst_reg, reg_t src_reg, bool* param_is_free){
+    return mov_reg.get_possible_cached(make_tuple(dst_reg, src_reg), param_is_free, 2);
 }
 
-PossibleGadgets* GadgetDB::get_possible_amov_reg(reg_t dst_reg, reg_t src_reg1, Op src_op, reg_t src_reg2, bool* param_is_free){
-    return amov_reg.get_possible(make_tuple(dst_reg, src_reg1, (op_t)src_op, src_reg2), param_is_free, 4);
+std::shared_ptr<const PossibleGadgets> GadgetDB::get_possible_amov_reg(reg_t dst_reg, reg_t src_reg1, Op src_op, reg_t src_reg2, bool* param_is_free){
+    return amov_reg.get_possible_cached(make_tuple(dst_reg, src_reg1, (op_t)src_op, src_reg2), param_is_free, 4);
 }
 
-PossibleGadgets* GadgetDB::get_possible_mov_cst(reg_t dst_reg, cst_t src_cst, bool* param_is_free){
-    return mov_cst.get_possible(make_tuple(dst_reg, src_cst), param_is_free, 2);
+std::shared_ptr<const PossibleGadgets> GadgetDB::get_possible_mov_cst(reg_t dst_reg, cst_t src_cst, bool* param_is_free){
+    return mov_cst.get_possible_cached(make_tuple(dst_reg, src_cst), param_is_free, 2);
 }
 
-PossibleGadgets* GadgetDB::get_possible_amov_cst(reg_t dst_reg, reg_t src_reg, Op src_op, cst_t src_cst, bool* param_is_free){
-    return amov_cst.get_possible(make_tuple(dst_reg, src_reg, (op_t)src_op, src_cst), param_is_free, 4);
+std::shared_ptr<const PossibleGadgets> GadgetDB::get_possible_amov_cst(reg_t dst_reg, reg_t src_reg, Op src_op, cst_t src_cst, bool* param_is_free){
+    return amov_cst.get_possible_cached(make_tuple(dst_reg, src_reg, (op_t)src_op, src_cst), param_is_free, 4);
 }
 
-PossibleGadgets* GadgetDB::get_possible_load(reg_t dst_reg, reg_t src_addr_reg, cst_t src_addr_offset, bool* param_is_free){
-    return load.get_possible(make_tuple(dst_reg, src_addr_reg, src_addr_offset), param_is_free, 3);
+std::shared_ptr<const PossibleGadgets> GadgetDB::get_possible_load(reg_t dst_reg, reg_t src_addr_reg, cst_t src_addr_offset, bool* param_is_free){
+    return load.get_possible_cached(make_tuple(dst_reg, src_addr_reg, src_addr_offset), param_is_free, 3);
 }
 
-PossibleGadgets* GadgetDB::get_possible_aload(reg_t dst_reg, Op op, reg_t src_addr_reg, cst_t src_addr_offset, bool* param_is_free){
-    return aload.get_possible(make_tuple(dst_reg, (op_t)op, src_addr_reg, src_addr_offset), param_is_free, 4);
+std::shared_ptr<const PossibleGadgets> GadgetDB::get_possible_aload(reg_t dst_reg, Op op, reg_t src_addr_reg, cst_t src_addr_offset, bool* param_is_free){
+    return aload.get_possible_cached(make_tuple(dst_reg, (op_t)op, src_addr_reg, src_addr_offset), param_is_free, 4);
 }
 
-PossibleGadgets* GadgetDB::get_possible_store(reg_t dst_addr_reg, cst_t dst_addr_cst, reg_t src_reg, bool* param_is_free){
-    return store.get_possible(make_tuple(dst_addr_reg, dst_addr_cst, src_reg), param_is_free, 3);
+std::shared_ptr<const PossibleGadgets> GadgetDB::get_possible_store(reg_t dst_addr_reg, cst_t dst_addr_cst, reg_t src_reg, bool* param_is_free){
+    return store.get_possible_cached(make_tuple(dst_addr_reg, dst_addr_cst, src_reg), param_is_free, 3);
 }
 
-PossibleGadgets* GadgetDB::get_possible_astore(reg_t dst_addr_reg, cst_t dst_addr_cst, Op op, reg_t src_reg, bool* param_is_free){
-    return astore.get_possible(make_tuple(dst_addr_reg, dst_addr_cst, (op_t)op, src_reg), param_is_free, 3);
+std::shared_ptr<const PossibleGadgets> GadgetDB::get_possible_astore(reg_t dst_addr_reg, cst_t dst_addr_cst, Op op, reg_t src_reg, bool* param_is_free){
+    return astore.get_possible_cached(make_tuple(dst_addr_reg, dst_addr_cst, (op_t)op, src_reg), param_is_free, 3);
+}
+
+/* ============== Check for possible gadgets ===================== */
+
+bool GadgetDB::has_possible_mov_reg(reg_t dst_reg, reg_t src_reg, const bool* param_is_free, BranchType branch){
+    return mov_reg.has_possible(make_tuple(dst_reg, src_reg), param_is_free, 2, branch);
+}
+
+bool GadgetDB::has_possible_amov_reg(reg_t dst_reg, reg_t src_reg1, Op src_op, reg_t src_reg2, const bool* param_is_free, BranchType branch){
+    return amov_reg.has_possible(make_tuple(dst_reg, src_reg1, (op_t)src_op, src_reg2), param_is_free, 4, branch);
+}
+
+bool GadgetDB::has_possible_mov_cst(reg_t dst_reg, cst_t src_cst, const bool* param_is_free, BranchType branch){
+    return mov_cst.has_possible(make_tuple(dst_reg, src_cst), param_is_free, 2, branch);
+}
+
+bool GadgetDB::has_possible_amov_cst(reg_t dst_reg, reg_t src_reg, Op src_op, cst_t src_cst, const bool* param_is_free, BranchType branch){
+    return amov_cst.has_possible(make_tuple(dst_reg, src_reg, (op_t)src_op, src_cst), param_is_free, 4, branch);
+}
+
+bool GadgetDB::has_possible_load(reg_t dst_reg, reg_t src_addr_reg, cst_t src_addr_offset, const bool* param_is_free, BranchType branch){
+    return load.has_possible(make_tuple(dst_reg, src_addr_reg, src_addr_offset), param_is_free, 3, branch);
+}
+
+bool GadgetDB::has_possible_aload(reg_t dst_reg, Op op, reg_t src_addr_reg, cst_t src_addr_offset, const bool* param_is_free, BranchType branch){
+    return aload.has_possible(make_tuple(dst_reg, (op_t)op, src_addr_reg, src_addr_offset), param_is_free, 4, branch);
+}
+
+bool GadgetDB::has_possible_store(reg_t dst_addr_reg, cst_t dst_addr_cst, reg_t src_reg, const bool* param_is_free, BranchType branch){
+    return store.has_possible(make_tuple(dst_addr_reg, dst_addr_cst, src_reg), param_is_free, 3, branch);
+}
+
+bool GadgetDB::has_possible_astore(reg_t dst_addr_reg, cst_t dst_addr_cst, Op op, reg_t src_reg, const bool* param_is_free, BranchType branch){
+    return astore.has_possible(make_tuple(dst_addr_reg, dst_addr_cst, (op_t)op, src_reg), param_is_free, 4, branch);
 }
 
 void GadgetDB::clear(){
@@ -354,6 +388,9 @@ void GadgetDB::clear(){
     aload.clear();
     store.clear();
     astore.clear();
+    jmp.clear();
+    syscall.clear();
+    int80.clear();
     for( auto g : all ){
         delete g;
     }

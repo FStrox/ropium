@@ -30,9 +30,10 @@ struct ParamDep{
 };
 
 class Param{
+    string _name; // Name for the param (constants only), set by make_cst()
+    varslot_t _slot; // Slot of _name in VarContexts, looked up on first use
 public:
     ParamType type; 
-    string name; // Name for the param (used for 'free' constants only)
     // Value
     cst_t value; // Used to put constant OR regnum
     // Dependencies
@@ -41,7 +42,20 @@ public:
     bool is_fixed;
     bool is_data_link; 
 
-    Param():type(ParamType::NONE), name(""), value(-1), expr(nullptr), is_fixed(true), is_data_link(false){};
+    Param():_name(""), _slot(VARSLOT_NONE), type(ParamType::NONE), value(-1), expr(nullptr), is_fixed(true), is_data_link(false){};
+
+    const string& name() const { return _name; }
+    varslot_t slot(){
+        if( _slot == VARSLOT_NONE ){
+            _slot = var_slot(_name);
+        }
+        return _slot;
+    }
+    // Give the param a new name, keeping its value and dependencies
+    void rename(const string& n){
+        _name = n;
+        _slot = VARSLOT_NONE;
+    }
 
     void add_dep(node_t n, param_t p){
         // Check if already present
@@ -84,7 +98,7 @@ public:
     // Fixed or free constant
     void make_cst(cst_t val, string n, bool fixed=true){
         type = ParamType::CST;
-        name = n;
+        rename(n);
         value = val;
         is_fixed = fixed;
         deps.clear();
@@ -95,7 +109,7 @@ public:
     // Dependent constant
     void make_cst(node_t dn, int dpt, Expr e, string n){
         type = ParamType::CST;
-        name = n;
+        rename(n);
         value = 0;
         is_fixed = false;
         deps.clear();
@@ -418,6 +432,25 @@ public:
     bool modifies_reg(int reg_num);
 };
 
+// Inline because it is called in the loop headers of the gadget selection
+// hot path
+inline int Node::nb_params(){
+    switch( type ){
+        case GadgetType::MOV_REG: return NB_PARAM_MOVREG;
+        case GadgetType::MOV_CST: return NB_PARAM_MOVCST;
+        case GadgetType::AMOV_CST: return NB_PARAM_AMOVCST;
+        case GadgetType::AMOV_REG: return NB_PARAM_AMOVREG;
+        case GadgetType::LOAD: return NB_PARAM_LOAD;
+        case GadgetType::ALOAD: return NB_PARAM_ALOAD;
+        case GadgetType::STORE: return NB_PARAM_STORE;
+        case GadgetType::ASTORE: return NB_PARAM_ASTORE;
+        case GadgetType::SYSCALL: return NB_PARAM_SYSCALL;
+        case GadgetType::INT80: return NB_PARAM_INT80;
+
+        default: throw runtime_exception("Unsupported gadget type in Node::nb_params()");
+    }
+}
+
 ostream& operator<<(ostream& os, Node& node);
 
 class InterferencePoint {
@@ -438,12 +471,20 @@ private:
     void _resolve_param(Param& param);
     void _resolve_all_params(node_t n);
     const vector<Gadget*>& _get_matching_gadgets(GadgetDB& db, node_t node);
-    PossibleGadgets* _get_possible_gadgets(GadgetDB& db, node_t n);
+    std::shared_ptr<const PossibleGadgets> _get_possible_gadgets(GadgetDB& db, node_t n);
+    bool _may_match_gadgets(GadgetDB& db, node_t n);
     bool _check_strategy_constraints(Node& node, Arch* arch);
     bool _check_assigned_gadget_constraints(Node& node, Arch* arch);
     bool _check_special_padding_constraints(Node& node, Arch* arch, Constraint* constraint=nullptr);
     bool _do_scheduling(int interference_idx=0);
-    
+    // What a gadget selection writes in the nodes
+    struct SelectionState{
+        vector<cst_t> values; // Params and special paddings
+        vector<Gadget*> gadgets; // affected_gadget of each node
+    };
+    void _save_selection_state(SelectionState& state);
+    void _restore_selection_state(const SelectionState& state);
+
     bool has_gadget_selection;
     VarContext params_ctx;
     int _depth;

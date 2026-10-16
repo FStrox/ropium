@@ -4,7 +4,10 @@
 #include <cstring>
 #include "murmur3.h"
 #include <algorithm>
+#include <atomic>
+#include <deque>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 
 using std::make_shared;
@@ -63,7 +66,7 @@ hash_t exprhash(void* hash_in, int len, uint32_t seed){
 /* Implementation of expression classes */ 
 // ==================================
 ExprObject::ExprObject(ExprType t, exprsize_t s, bool _is_simp): type(t), size(s), _hashed(false), _hash(0), 
-    _simplified_expr(nullptr), _is_simplified(_is_simp), _concrete_ctx_id(-1){}
+    _simplified_expr(nullptr), _is_simplified(_is_simp), _concrete_ctx_id(VARCTX_ID_NONE){}
 bool ExprObject::is_cst(){return type == ExprType::CST;}
 bool ExprObject::is_var(){return type == ExprType::VAR;}
 bool ExprObject::is_mem(){return type == ExprType::MEM;}
@@ -113,7 +116,7 @@ bool ExprObject::inf(Expr e2){
     }
 }
 
-void ExprObject::replace_var_name(string& curr_name, string& new_name){
+void ExprObject::replace_var_name(const string& curr_name, const string& new_name){
     switch(type){
         case ExprType::CST: return;
         case ExprType::VAR: 
@@ -160,7 +163,8 @@ Expr ExprCst::copy(){
     return exprcst(size, _cst);
 }
 // ==================================
-ExprVar::ExprVar(exprsize_t s, string n, int num): ExprObject(ExprType::VAR, s, true), _name(n), _num(num){
+ExprVar::ExprVar(exprsize_t s, string n, int num): ExprObject(ExprType::VAR, s, true), _name(n), _num(num),
+    _slot(VARSLOT_NONE){
     if( s > 64 ){
         throw expression_exception(QuickFmt() << "Cannot create symbolic variables of size > 64 (got "
             << std::dec << s << ")" >> QuickFmt::to_str);
@@ -184,16 +188,22 @@ cst_t ExprVar::concretize(VarContext* ctx){
     if( ctx == nullptr){
         throw expression_exception("Cannot concretize symbolic variable without supplying a context");
     }
-    if( _concrete_ctx_id == ctx->id )
+    if( _concrete_ctx_id == ctx->id() )
         return _concrete;
     else{
-        _concrete = ctx->get(_name);
-        _concrete_ctx_id = ctx->id; 
+        if( _slot == VARSLOT_NONE ){
+            _slot = var_slot(_name);
+        }
+        _concrete = ctx->get_slot(_slot);
+        _concrete_ctx_id = ctx->id(); 
     }
     return _concrete; 
 }
 const string& ExprVar::name(){ return _name; } 
-void ExprVar::replace_name(string& new_name){ _name = new_name; }
+void ExprVar::replace_name(const string& new_name){
+    _name = new_name;
+    _slot = VARSLOT_NONE;
+}
 void ExprVar::print(ostream& os){os << _name;}
 Expr ExprVar::copy(){
     return exprvar(size, _name);
@@ -248,7 +258,7 @@ bool ExprUnop::is_unop(Op op){
 }
 
 cst_t ExprUnop::concretize(VarContext* ctx){
-    if( ctx != nullptr && _concrete_ctx_id == ctx->id )
+    if( ctx != nullptr && _concrete_ctx_id == ctx->id() )
         return _concrete;
     else{
         switch(_op){
@@ -257,7 +267,7 @@ cst_t ExprUnop::concretize(VarContext* ctx){
             default: throw runtime_exception("Missing case in ExprUnop::concretize()");
         }
         if( ctx != nullptr ){
-            _concrete_ctx_id = ctx->id; 
+            _concrete_ctx_id = ctx->id(); 
         }
         _concrete = cst_sign_extend(size, _concrete);
     }
@@ -334,7 +344,7 @@ bool ExprBinop::is_binop(Op op){
 }
 
 cst_t ExprBinop::concretize(VarContext* ctx){
-    if( ctx != nullptr && _concrete_ctx_id == ctx->id )
+    if( ctx != nullptr && _concrete_ctx_id == ctx->id() )
         return _concrete;
     else{
         switch(_op){
@@ -368,7 +378,7 @@ cst_t ExprBinop::concretize(VarContext* ctx){
             default: throw runtime_exception("Missing case in ExprBinop::concretize()");
         }
         if( ctx != nullptr ){
-            _concrete_ctx_id = ctx->id;
+            _concrete_ctx_id = ctx->id();
         }
         _concrete =cst_sign_extend(size, _concrete);
     }
@@ -417,7 +427,7 @@ void ExprExtract::print(ostream& os){
 cst_t ExprExtract::concretize(VarContext* ctx){
     cst_t high, low;
     ucst_t mask;
-    if( ctx != nullptr && _concrete_ctx_id == ctx->id )
+    if( ctx != nullptr && _concrete_ctx_id == ctx->id() )
         return _concrete;
     else{
         high = args[1]->concretize(ctx);
@@ -430,7 +440,7 @@ cst_t ExprExtract::concretize(VarContext* ctx){
         
         _concrete =  ((ucst_t)args[0]->concretize(ctx) & mask) >> (ucst_t)low;
         if( ctx != nullptr )
-            _concrete_ctx_id = ctx->id; 
+            _concrete_ctx_id = ctx->id(); 
         _concrete = cst_sign_extend(size, _concrete);
     }
     return _concrete; 
@@ -465,7 +475,7 @@ void ExprConcat::print(ostream& os){
 
 cst_t ExprConcat::concretize(VarContext* ctx){
     cst_t upper, lower; 
-    if( ctx != nullptr && _concrete_ctx_id == ctx->id )
+    if( ctx != nullptr && _concrete_ctx_id == ctx->id() )
         return _concrete;
     else{
         upper = args[0]->concretize(ctx);
@@ -473,7 +483,7 @@ cst_t ExprConcat::concretize(VarContext* ctx){
         _concrete = cst_sign_extend(size, (((ucst_t)upper)<<(ucst_t)args[1]->size)
                                              | (ucst_t)cst_sign_trunc(args[1]->size, lower));
         if( ctx != nullptr )
-            _concrete_ctx_id = ctx->id; 
+            _concrete_ctx_id = ctx->id(); 
          _concrete =cst_sign_extend(size, _concrete);
     }
    
@@ -517,12 +527,12 @@ void ExprBisz::print(ostream& out){
 }
 
 cst_t ExprBisz::concretize(VarContext* ctx){
-    if( ctx != nullptr && _concrete_ctx_id == ctx->id )
+    if( ctx != nullptr && _concrete_ctx_id == ctx->id() )
         return _concrete;
     else{
         _concrete = (args[0]->concretize(ctx) == 0)? _mode : _mode^1;
         if( ctx != nullptr )
-            _concrete_ctx_id = ctx->id;
+            _concrete_ctx_id = ctx->id();
         _concrete =cst_sign_extend(size, _concrete);
     }
     
@@ -1009,29 +1019,134 @@ cst_t cst_sign_extend(exprsize_t size, cst_t c){
 }
 
 /* ====================================== */
-VarContext::VarContext(int i): id(i){}
+namespace{
+    // Names are never removed. A deque keeps references to them valid while
+    // it grows, so var_slot_name() can return one without holding the lock.
+    struct VarSlotTable{
+        std::mutex lock;
+        unordered_map<string, varslot_t> slots;
+        std::deque<string> names;
+    };
 
-void VarContext::set(const string& name, cst_t value){
-    varmap[name] = value;
-    id++;
+    // Function-local static: initialized on first use, whatever the
+    // initialization order of the other translation units
+    VarSlotTable& var_slot_table(){
+        static VarSlotTable table;
+        return table;
+    }
 }
 
-cst_t VarContext::get(const string& name){
-    map<string, cst_t>::iterator it; 
-    if( ( it = varmap.find(name)) == varmap.end())
-        throw expression_exception(QuickFmt() << "Trying to access variable '" 
+varslot_t var_slot(const string& name){
+    VarSlotTable& table = var_slot_table();
+    std::lock_guard<std::mutex> guard(table.lock);
+    auto it = table.slots.find(name);
+    if( it != table.slots.end() ){
+        return it->second;
+    }
+    if( table.names.size() >= VARSLOT_NONE ){
+        throw expression_exception("Too many distinct variable names");
+    }
+    varslot_t slot = table.names.size();
+    table.names.push_back(name);
+    table.slots.emplace(name, slot);
+    return slot;
+}
+
+bool find_var_slot(const string& name, varslot_t& slot){
+    VarSlotTable& table = var_slot_table();
+    std::lock_guard<std::mutex> guard(table.lock);
+    auto it = table.slots.find(name);
+    if( it == table.slots.end() ){
+        return false;
+    }
+    slot = it->second;
+    return true;
+}
+
+const string& var_slot_name(varslot_t slot){
+    VarSlotTable& table = var_slot_table();
+    std::lock_guard<std::mutex> guard(table.lock);
+    if( slot >= table.names.size() ){
+        throw expression_exception(QuickFmt() << "Invalid variable slot " << std::dec << slot >> QuickFmt::to_str);
+    }
+    return table.names[slot];
+}
+
+size_t var_slot_count(){
+    VarSlotTable& table = var_slot_table();
+    std::lock_guard<std::mutex> guard(table.lock);
+    return table.names.size();
+}
+
+// Process-wide so that two contexts never share an id (see VarContext in
+// expression.hpp). Contexts take ids from it by blocks. 64 bits cannot wrap:
+// even one block per context allows 2^48 contexts. Relaxed ordering is
+// enough: only the uniqueness of the returned values matters.
+static std::atomic<varctx_id_t> next_varctx_id(VARCTX_ID_NONE + 1);
+static const varctx_id_t VARCTX_ID_BLOCK = 1 << 16;
+
+VarContext::VarContext(): _next_id(0), _end_id(0){
+    _new_id();
+}
+
+VarContext::VarContext(const VarContext& other): _vars(other._vars), _id(other._id), _next_id(0), _end_id(0){}
+
+VarContext& VarContext::operator=(const VarContext& other){
+    _vars = other._vars;
+    _id = other._id;
+    // Keep the ids reserved by this object: nobody else can use them
+    return *this;
+}
+
+void VarContext::_reserve_ids(){
+    _next_id = next_varctx_id.fetch_add(VARCTX_ID_BLOCK, std::memory_order_relaxed);
+    _end_id = _next_id + VARCTX_ID_BLOCK;
+}
+
+void VarContext::_grow(varslot_t slot){
+    // size_t: VARSLOT_NONE + 1 must not wrap to 0
+    _vars.resize(static_cast<size_t>(slot) + 1, Var{0, false});
+}
+
+[[noreturn]] static void throw_unknown_var(const string& name){
+    throw expression_exception(QuickFmt() << "Trying to access variable '"
             << name << "' which is unknown in context" >> QuickFmt::to_str);
-    return it->second;
+}
+
+void VarContext::_throw_unknown_var(varslot_t slot) const{
+    throw_unknown_var(slot < var_slot_count() ? var_slot_name(slot) : string("<invalid slot>"));
+}
+
+void VarContext::set(const string& name, cst_t value){
+    set_slot(var_slot(name), value);
+}
+
+cst_t VarContext::get(const string& name) const{
+    varslot_t slot;
+    if( !find_var_slot(name, slot) ){
+        throw_unknown_var(name);
+    }
+    return get_slot(slot);
 }
 
 void VarContext::remove(const string& name){
-    varmap.erase(name);
-    id++;
+    varslot_t slot;
+    if( find_var_slot(name, slot) && slot < _vars.size() && _vars[slot].is_set ){
+        _vars[slot].is_set = false;
+        _new_id();
+    }
 }
 
-void VarContext::print(ostream& os ){
+void VarContext::print(ostream& os) const{
+    // Sort by name so that the output does not depend on slot numbers
+    map<string, cst_t> sorted;
+    for( varslot_t slot = 0; slot < _vars.size(); slot++ ){
+        if( _vars[slot].is_set ){
+            sorted.emplace(var_slot_name(slot), _vars[slot].value);
+        }
+    }
     os << std::endl;
-    for( auto var : varmap ){
+    for( auto& var : sorted ){
         os << var.first << " : " << std::hex << "0x" << var.second << std::dec << std::endl;
     }
 }

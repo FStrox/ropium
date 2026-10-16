@@ -156,5 +156,35 @@ void unset_signint_handler();
 bool is_pending_sigint();
 void notify_sigint_handled();
 
+/* ========= Search deadline ============= */
+/* Optional wall-clock limit for one ROPCompiler::compile() call. Like the
+   Ctrl+C flag it is process-wide (the compiler runs one search at a time).
+   Once a check has seen the deadline, it stays reached until the next
+   set_search_deadline() or unset_search_deadline() */
+void set_search_deadline(unsigned int timeout_ms); // 0 = no deadline
+void unset_search_deadline();
+// Reads the clock
+bool is_search_deadline_reached();
+// Whether a check has seen the deadline (does not read the clock)
+bool search_deadline_was_reached();
+
+// Implementation of poll_search_deadline() (not for direct use)
+extern bool g_search_deadline_set;
+bool poll_search_deadline_slow();
+// For hot loops: a single load when no deadline is set (the default), otherwise
+// reads the clock only once every SEARCH_DEADLINE_POLL_PERIOD calls
+inline bool poll_search_deadline(){
+    return g_search_deadline_set && poll_search_deadline_slow();
+}
+
+// Sets the search deadline for the lifetime of the object
+class SearchDeadlineScope{
+public:
+    explicit SearchDeadlineScope(unsigned int timeout_ms){ set_search_deadline(timeout_ms); }
+    ~SearchDeadlineScope(){ unset_search_deadline(); }
+    SearchDeadlineScope(const SearchDeadlineScope& other) = delete;
+    SearchDeadlineScope& operator=(const SearchDeadlineScope& other) = delete;
+};
+
 
 #endif

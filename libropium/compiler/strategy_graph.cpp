@@ -46,25 +46,9 @@ bool Node::has_mandatory_following_node(){
     return mandatory_following_node != -1;
 }
 
-int Node::nb_params(){
-    switch( type ){
-        case GadgetType::MOV_REG: return NB_PARAM_MOVREG;
-        case GadgetType::MOV_CST: return NB_PARAM_MOVCST;
-        case GadgetType::AMOV_CST: return NB_PARAM_AMOVCST;
-        case GadgetType::AMOV_REG: return NB_PARAM_AMOVREG;
-        case GadgetType::LOAD: return NB_PARAM_LOAD;
-        case GadgetType::ALOAD: return NB_PARAM_ALOAD;
-        case GadgetType::STORE: return NB_PARAM_STORE;
-        case GadgetType::ASTORE: return NB_PARAM_ASTORE;
-        case GadgetType::SYSCALL: return NB_PARAM_SYSCALL;
-        case GadgetType::INT80: return NB_PARAM_INT80;
-        
-        default: throw runtime_exception("Unsupported gadget type in Node::nb_params()");
-    }
-}
-
 bool Node::has_free_param(){
-    for( int p = 0; p < nb_params(); p++){
+    const int nb = nb_params();
+    for( int p = 0; p < nb; p++){
         if( params[p].is_free() )
             return true;
     }
@@ -319,19 +303,22 @@ bool Node::modifies_reg(int reg_num){
         return (affected_gadget->modified_regs[reg_num]);
 }
 
-addr_t _get_valid_gadget_address(Gadget* gadget, Arch* arch, Constraint* constraint){
-    for( addr_t addr : gadget->addresses){
-        if( !constraint || constraint->bad_bytes.is_valid_address(addr, arch->octets))
-            return addr;
+// Get the first address of 'gadget' without bad bytes. Returns false if
+// there is none. It runs for every candidate gadget of the gadget selection,
+// so it doesn't throw.
+static bool _get_valid_gadget_address(Gadget* gadget, Arch* arch, Constraint* constraint, addr_t& addr){
+    for( addr_t a : gadget->addresses){
+        if( !constraint || constraint->bad_bytes.is_valid_address(a, arch->octets)){
+            addr = a;
+            return true;
+        }
     }
-    throw strategy_exception("Fatal error: couldn't get valid gadget address. This should not happen ! ");
+    return false;
 }
 
 bool Node::assign_gadget(Gadget* gadget, Arch* arch, Constraint* constraint){
     addr_t addr;
-    try{
-        addr = _get_valid_gadget_address(gadget, arch, constraint);
-    }catch(strategy_exception& e){
+    if( !_get_valid_gadget_address(gadget, arch, constraint, addr) ){
         return false;
     }
 
@@ -352,7 +339,7 @@ void Node::apply_assertion(){
 /* ===============  Strategy Graphs ============== */
 /* =============================================== */
 
-StrategyGraph::StrategyGraph(): has_gadget_selection(false), _depth(-1){};
+StrategyGraph::StrategyGraph(): has_gadget_selection(false), _depth(-1), size(0){};
 
 void StrategyGraph::update_size(){
     size = 0;
@@ -398,7 +385,7 @@ void _redirect_param_deps(Param& param, Node& curr_node, param_t curr_param_type
             // Change var name in expression if constant
             if( param.type == ParamType::CST && param.expr != nullptr){
                 Expr e = param.expr->copy();
-                e->replace_var_name(curr_node.params[curr_param_type].name, new_node.params[new_param_type].name); 
+                e->replace_var_name(curr_node.params[curr_param_type].name(), new_node.params[new_param_type].name()); 
                 param.expr = e;
             }
             // Redirect
@@ -674,14 +661,15 @@ void StrategyGraph::_resolve_param(Param& param){
     }
     // If constant, update the context
     if( param.type == ParamType::CST){
-        params_ctx.set(param.name, param.value);
+        params_ctx.set_slot(param.slot(), param.value);
     }
 }
 
 void StrategyGraph::_resolve_all_params(node_t n){
     Node& node = nodes[n];
     // Resolve normal parameters
-    for( int p = 0; p < node.nb_params(); p++){
+    const int nb = node.nb_params();
+    for( int p = 0; p < nb; p++){
         _resolve_param(node.params[p]);
     }
     // Resolve special paddings
@@ -765,7 +753,7 @@ const vector<Gadget*>& StrategyGraph::_get_matching_gadgets(GadgetDB& db, node_t
 //   - add ecx, esi
 //   ... 
 
-PossibleGadgets* StrategyGraph::_get_possible_gadgets(GadgetDB& db, node_t n){
+std::shared_ptr<const PossibleGadgets> StrategyGraph::_get_possible_gadgets(GadgetDB& db, node_t n){
     Node& node = nodes[n];
     bool params_status[MAX_PARAMS];
     int p;
@@ -826,6 +814,69 @@ PossibleGadgets* StrategyGraph::_get_possible_gadgets(GadgetDB& db, node_t n){
     }
 }
 
+// Returns false if no gadget can be selected for node 'n', whatever values its
+// free and dependent params take: only its constant params and its branch
+// type are compared with the database. Can be called before any parameter is
+// resolved.
+bool StrategyGraph::_may_match_gadgets(GadgetDB& db, node_t n){
+    Node& node = nodes[n];
+    bool any_value[MAX_PARAMS];
+    const int nb = node.nb_params();
+    for( int p = 0; p < nb; p++){
+        any_value[p] = node.params[p].is_free() || node.params[p].is_dependent();
+    }
+    switch( node.type ){
+        case GadgetType::MOV_REG:
+            return db.has_possible_mov_reg(node.params[PARAM_MOVREG_DST_REG].value,
+                                           node.params[PARAM_MOVREG_SRC_REG].value,
+                                           any_value, node.branch_type);
+        case GadgetType::AMOV_REG:
+            return db.has_possible_amov_reg(node.params[PARAM_AMOVREG_DST_REG].value,
+                                           node.params[PARAM_AMOVREG_SRC_REG1].value,
+                                           (Op)node.params[PARAM_AMOVREG_SRC_OP].value,
+                                           node.params[PARAM_AMOVREG_SRC_REG2].value,
+                                           any_value, node.branch_type);
+        case GadgetType::MOV_CST:
+            return db.has_possible_mov_cst(node.params[PARAM_MOVCST_DST_REG].value,
+                                           node.params[PARAM_MOVCST_SRC_CST].value,
+                                           any_value, node.branch_type);
+        case GadgetType::AMOV_CST:
+            return db.has_possible_amov_cst(node.params[PARAM_AMOVCST_DST_REG].value,
+                                           node.params[PARAM_AMOVCST_SRC_REG].value,
+                                           (Op)node.params[PARAM_AMOVCST_SRC_OP].value,
+                                           node.params[PARAM_AMOVCST_SRC_CST].value,
+                                           any_value, node.branch_type);
+        case GadgetType::LOAD:
+            return db.has_possible_load(node.params[PARAM_LOAD_DST_REG].value,
+                                        node.params[PARAM_LOAD_SRC_ADDR_REG].value,
+                                        node.params[PARAM_LOAD_SRC_ADDR_OFFSET].value,
+                                        any_value, node.branch_type);
+        case GadgetType::ALOAD:
+            return db.has_possible_aload(node.params[PARAM_ALOAD_DST_REG].value,
+                                        (Op)node.params[PARAM_ALOAD_OP].value,
+                                        node.params[PARAM_ALOAD_SRC_ADDR_REG].value,
+                                        node.params[PARAM_ALOAD_SRC_ADDR_OFFSET].value,
+                                        any_value, node.branch_type);
+        case GadgetType::STORE:
+            return db.has_possible_store(node.params[PARAM_STORE_DST_ADDR_REG].value,
+                                        node.params[PARAM_STORE_DST_ADDR_OFFSET].value,
+                                        node.params[PARAM_STORE_SRC_REG].value,
+                                        any_value, node.branch_type);
+        case GadgetType::ASTORE:
+            return db.has_possible_astore(node.params[PARAM_ASTORE_DST_ADDR_REG].value,
+                                        node.params[PARAM_ASTORE_DST_ADDR_OFFSET].value,
+                                        (Op)node.params[PARAM_ASTORE_OP].value,
+                                        node.params[PARAM_ASTORE_SRC_REG].value,
+                                        any_value, node.branch_type);
+        case GadgetType::SYSCALL:
+            return has_branch_type(db.get_syscall(), node.branch_type);
+        case GadgetType::INT80:
+            return has_branch_type(db.get_int80(), node.branch_type);
+        default:
+            return true; // Let the search report unsupported nodes
+    }
+}
+
 // Must be checked after parameter resolution
 bool StrategyGraph::_check_strategy_constraints(Node& node, Arch* arch){
     for( constraint_callback_t constr : node.strategy_constraints ){
@@ -855,6 +906,41 @@ bool StrategyGraph::_check_assigned_gadget_constraints(Node& node, Arch* arch){
     return true;
 }
 
+// The gadget selection overwrites param values (free, dependent and gadget
+// params, special paddings) and assigned gadgets. A failed selection puts them
+// back, so the rules applied to the graph afterwards don't depend on the last
+// candidates the search tried. Node assertions aren't saved: the selection
+// rebuilds them before every use.
+void StrategyGraph::_save_selection_state(SelectionState& state){
+    state.values.clear();
+    state.gadgets.clear();
+    for( Node& node : nodes ){
+        const int nb = node.nb_params();
+        for( int p = 0; p < nb; p++ )
+            state.values.push_back(node.params[p].value);
+        for( ROPPadding& padd : node.special_paddings ){
+            state.values.push_back(padd.offset.value);
+            state.values.push_back(padd.value.value);
+        }
+        state.gadgets.push_back(node.affected_gadget);
+    }
+}
+
+void StrategyGraph::_restore_selection_state(const SelectionState& state){
+    vector<cst_t>::const_iterator value = state.values.begin();
+    vector<Gadget*>::const_iterator gadget = state.gadgets.begin();
+    for( Node& node : nodes ){
+        const int nb = node.nb_params();
+        for( int p = 0; p < nb; p++ )
+            node.params[p].value = *(value++);
+        for( ROPPadding& padd : node.special_paddings ){
+            padd.offset.value = *(value++);
+            padd.value.value = *(value++);
+        }
+        node.affected_gadget = *(gadget++);
+    }
+}
+
 /* This function tries to find a gadget selection for a strategy graph.
  It iteratively (the order is the one of the DFS on parameter dependencies) resolves
  parameters and queries the database to find a matching gadget on each node of the
@@ -866,8 +952,8 @@ bool StrategyGraph::select_gadgets(GadgetDB& db, Constraint* constraint, Arch* a
         throw runtime_exception("StrategyGraph::select_gadget(): should NEVER be called with a non-NULL constraint and a NULL arch");
     }
 
-    // Check if SIGINT
-    if( is_pending_sigint()){
+    // Check if SIGINT or search deadline reached
+    if( is_pending_sigint() || poll_search_deadline() ){
         return false;
     }
 
@@ -878,7 +964,21 @@ bool StrategyGraph::select_gadgets(GadgetDB& db, Constraint* constraint, Arch* a
         compute_dfs_params();
         compute_dfs_strategy();
         params_ctx = VarContext(); // New context for params
+        // If a node can't match any gadget the search can only fail, often
+        // after trying every candidate of the nodes before it: skip it. The
+        // result is the same, since a failed search leaves the graph as it
+        // was and lookups don't change the database.
+        for( Node& node : nodes ){
+            if( !node.is_disabled && !_may_match_gadgets(db, node.id) ){
+                has_gadget_selection = false;
+                return false;
+            }
+        }
+        SelectionState saved;
+        _save_selection_state(saved);
         has_gadget_selection = select_gadgets(db, constraint, arch, 0);
+        if( !has_gadget_selection )
+            _restore_selection_state(saved);
         return has_gadget_selection;
     }
 
@@ -902,16 +1002,20 @@ bool StrategyGraph::select_gadgets(GadgetDB& db, Constraint* constraint, Arch* a
 
     // 1. Try all possibilities for parameters
     if( node.has_free_param() ){
-        // Get possible gadgets
-        PossibleGadgets* possible = _get_possible_gadgets(db, node.id);
+        // Get possible gadgets (shared with the database's cache)
+        std::shared_ptr<const PossibleGadgets> possible = _get_possible_gadgets(db, node.id);
+        const int nb = node.nb_params();
         // 2.a. Try all possible params
-        for( auto pos: possible->gadgets ){
+        for( const auto& pos: possible->gadgets ){
+            // A single DFS level can take seconds on large DBs
+            if( poll_search_deadline() )
+                break;
             // Update free params
-            for( int p = 0; p < node.nb_params(); p++){
+            for( int p = 0; p < nb; p++){
                 if( node.params[p].is_free())
                     node.params[p].value = pos.first[p];
                 if( node.params[p].is_cst())
-                    params_ctx.set(node.params[p].name, node.params[p].value);
+                    params_ctx.set_slot(node.params[p].slot(), node.params[p].value);
             }
             // Resolve params again (useful for special paddings that depend
             // on regular parameters such as offsets, etc)
@@ -927,6 +1031,8 @@ bool StrategyGraph::select_gadgets(GadgetDB& db, Constraint* constraint, Arch* a
 
             // 2.b Try all possible gadgets
             for( Gadget* gadget : *(pos.second) ){
+                if( poll_search_deadline() )
+                    break;
                 if( ! node.assign_gadget(gadget, arch, constraint))
                     continue;
 
@@ -934,18 +1040,17 @@ bool StrategyGraph::select_gadgets(GadgetDB& db, Constraint* constraint, Arch* a
                 // on gadget specific parameters such as gadget_addr, gadget_sp_inc, etc)
                 _resolve_all_params(node.id);
 
-                // Check assigned gadget constraints and global constraint
-                if( !_check_assigned_gadget_constraints(node, arch) || (constraint && !constraint->check(gadget, arch, &node.assertion))){
+                // Check assigned gadget constraints and global constraint (assign_gadget()
+                // already chose an address without bad bytes)
+                if( !_check_assigned_gadget_constraints(node, arch) || (constraint && !constraint->check_except_bad_bytes(gadget, arch, &node.assertion))){
                     continue;
                 }
                 // 3. Recursive call on next node 
                 if( select_gadgets(db, constraint, arch, dfs_idx+1)){
-                    delete possible; possible = nullptr;
                     return true;
                 }
             }
         }
-        delete possible; possible = nullptr;
     }else{
 
         // Check strategy constraints 
@@ -956,6 +1061,8 @@ bool StrategyGraph::select_gadgets(GadgetDB& db, Constraint* constraint, Arch* a
 
             // 2. Try all possible gadgets (or a subset)
             for( Gadget* gadget : gadgets ){
+                if( poll_search_deadline() )
+                    break;
                 if( ! node.assign_gadget(gadget, arch, constraint))
                     continue;
 
@@ -970,8 +1077,9 @@ bool StrategyGraph::select_gadgets(GadgetDB& db, Constraint* constraint, Arch* a
                 // Prepare assertion for current parameter choice
                 node.apply_assertion();
 
-                // Check assigned gadget constraints and global constraint
-                if( !_check_assigned_gadget_constraints(node, arch) || (constraint && !constraint->check(gadget, arch, &node.assertion))){
+                // Check assigned gadget constraints and global constraint (assign_gadget()
+                // already chose an address without bad bytes)
+                if( !_check_assigned_gadget_constraints(node, arch) || (constraint && !constraint->check_except_bad_bytes(gadget, arch, &node.assertion))){
                     continue;
                 }
                 // 3. Recursive call on next node
@@ -1022,6 +1130,13 @@ void StrategyGraph::compute_interference_points(){
 
 bool StrategyGraph::_do_scheduling(int interference_idx){
     bool success = false;
+    // Scheduling tries both orders for every interference point, so one call
+    // can take hundreds of ms. Each step is a deadline poll: otherwise, when
+    // every gadget selection gets this far, the selection's own polls (and
+    // clock reads) are that far apart.
+    if( poll_search_deadline() ){
+        return false;
+    }
     if( interference_idx == interference_points.size() ){
         // All choices where made for interference edges, try to schedule
         return compute_dfs_scheduling();
@@ -1185,8 +1300,8 @@ ostream& operator<<(ostream& os, Param& param){
     }
     if( param.expr != nullptr )
         os << tab << "\t Expr: " << param.expr << std::endl;
-    if( !param.name.empty())
-        os << tab << "\t Name: " << param.name << std::endl;
+    if( !param.name().empty())
+        os << tab << "\t Name: " << param.name() << std::endl;
     return os;
 }
 

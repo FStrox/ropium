@@ -5,6 +5,7 @@
 #include <iostream>
 #include <string>
 #include <sstream>
+#include <set>
 #include <iomanip>
 
 using std::cout;
@@ -145,8 +146,8 @@ namespace test{
         /* Concretization */
         unsigned int concretization(){
             unsigned int nb = 0; 
-            VarContext ctx = VarContext(0);
-            VarContext ctx2 = VarContext(1);
+            VarContext ctx;
+            VarContext ctx2;
             Expr    v1 = exprvar(32, "var1" ),
                     v2 = exprvar(32, "var2"),
                     v3 = exprvar(64, "var3"),
@@ -230,7 +231,7 @@ namespace test{
         
         unsigned int change_varctx(){
             unsigned int nb = 0; 
-            VarContext ctx = VarContext(0);
+            VarContext ctx;
             Expr    v1 = exprvar(32, "var1" ),
                     v2 = exprvar(32, "var2"),
                     v3 = exprvar(64, "var3"),
@@ -259,9 +260,143 @@ namespace test{
             ctx.set("var2", -3);
             ctx.set("var4", 0xffff000000000000);
             
-            nb += _assert( e1->concretize(&ctx) == exprcst(32, 7)->concretize(&ctx), "Concretization gave wrong result"); 
+            nb += _assert( e1->concretize(&ctx) == exprcst(32, 7)->concretize(&ctx), "Concretization gave wrong result");
             nb += _assert( e2->concretize(&ctx) == exprcst(64, 0xffff000000000000)->concretize(&ctx), "Concretization gave wrong result");
-            
+
+            return nb;
+        }
+
+        unsigned int varctx_id(){
+            unsigned int nb = 0;
+            VarContext ctx, ctx2;
+            varctx_id_t id;
+
+            nb += _assert( ctx.id() != VARCTX_ID_NONE, "New context has the reserved id");
+            nb += _assert( ctx.id() != ctx2.id(), "Two new contexts have the same id");
+
+            id = ctx.id();
+            ctx.set("var1", 1);
+            nb += _assert( ctx.id() != id, "Adding a variable kept the id");
+            id = ctx.id();
+            ctx.set("var1", 1);
+            nb += _assert( ctx.id() == id, "Setting a variable to its current value changed the id");
+            ctx.set("var1", 2);
+            nb += _assert( ctx.id() != id, "Changing a variable kept the id");
+            id = ctx.id();
+            ctx.remove("unknown");
+            nb += _assert( ctx.id() == id, "Removing an unknown variable changed the id");
+            ctx.remove("var1");
+            nb += _assert( ctx.id() != id, "Removing a variable kept the id");
+
+            // A copy shares the id until one of the contexts changes
+            ctx.set("var1", 3);
+            VarContext copy = ctx;
+            nb += _assert( copy.id() == ctx.id(), "Copied context has a different id");
+            copy.set("var1", 4);
+            nb += _assert( copy.id() != ctx.id(), "Modified copy kept the id of the original");
+
+            // Copies of one state (copy-constructed or assigned) must not take
+            // the same next id
+            VarContext a;
+            a.set("var1", 1);
+            VarContext b(a), c;
+            c = a;
+            b.set("var1", 2);
+            c.set("var1", 3);
+            a.set("var1", 4);
+            nb += _assert( a.id() != b.id() && b.id() != c.id() && a.id() != c.id(), "Copies of a context reused an id");
+
+            // Ids stay unique past the end of a context's block of ids
+            std::set<varctx_id_t> ids;
+            VarContext d, e;
+            varslot_t slot = var_slot("var1");
+            for( int i = 0; i < 70000; i++ ){
+                d.set_slot(slot, i);
+                ids.insert(d.id());
+                e.set_slot(slot, i);
+                ids.insert(e.id());
+            }
+            nb += _assert( ids.size() == 140000, "Two contexts reused an id");
+            return nb;
+        }
+
+        // An expression shared between contexts must never return a value
+        // cached under another context, even when both contexts went through
+        // the same sequence of operations
+        unsigned int shared_expr_varctx(){
+            unsigned int nb = 0;
+            Expr    v1 = exprvar(32, "var1"),
+                    e1 = v1 + exprcst(32, 1);
+            VarContext ctx;
+            ctx.set("var1", 1);
+            nb += _assert( e1->concretize(&ctx) == 2, "Concretization gave wrong result");
+
+            VarContext ctx2;
+            ctx2.set("var1", 5);
+            nb += _assert( v1->concretize(&ctx2) == 5, "Concretization used a value cached under another context");
+            nb += _assert( e1->concretize(&ctx2) == 6, "Concretization used a value cached under another context");
+
+            // Unchanged contexts keep their cached values valid
+            ctx2.set("var1", 5);
+            nb += _assert( e1->concretize(&ctx2) == 6, "Concretization gave wrong result");
+            nb += _assert( e1->concretize(&ctx) == 2, "Concretization used a value cached under another context");
+            return nb;
+        }
+
+        unsigned int var_slots(){
+            unsigned int nb = 0;
+            varslot_t slot1 = var_slot("slot_test_var1"), slot2 = var_slot("slot_test_var2"), found;
+            bool got_exception = false;
+
+            // One slot per distinct name, for the whole process
+            nb += _assert( slot1 != slot2, "Two names got the same slot");
+            nb += _assert( var_slot("slot_test_var1") == slot1, "A name got two different slots");
+            nb += _assert( var_slot_name(slot2) == "slot_test_var2", "Wrong name for a slot");
+            nb += _assert( find_var_slot("slot_test_var1", found) && found == slot1, "find_var_slot() missed a name");
+            size_t count = var_slot_count();
+            nb += _assert( !find_var_slot("slot_test_never_added", found), "find_var_slot() found an unknown name");
+            nb += _assert( var_slot_count() == count, "find_var_slot() added a name");
+
+            // Setting by name or by slot is the same
+            VarContext ctx;
+            ctx.set("slot_test_var1", 10);
+            ctx.set_slot(slot2, -2);
+            nb += _assert( ctx.get_slot(slot1) == 10 && ctx.get("slot_test_var2") == -2, "Name and slot access disagree");
+            nb += _assert( exprvar(32, "slot_test_var2")->concretize(&ctx) == -2, "Concretization by slot gave wrong result");
+
+            // Unknown variables throw, whether looked up by name or by slot
+            try{ ctx.get("slot_test_never_added"); }catch(expression_exception& e){ got_exception = true; }
+            nb += _assert( got_exception, "Reading an unknown name should throw");
+            got_exception = false;
+            try{ ctx.get_slot(var_slot("slot_test_var3")); }catch(expression_exception& e){ got_exception = true; }
+            nb += _assert( got_exception, "Reading an unset slot should throw");
+            got_exception = false;
+            ctx.remove("slot_test_var1");
+            try{ ctx.get_slot(slot1); }catch(expression_exception& e){ got_exception = true; }
+            nb += _assert( got_exception, "Reading a removed variable should throw");
+
+            // Printing is sorted by name, not by slot
+            VarContext ctx2;
+            std::stringstream ss;
+            ctx2.set("slot_test_var2", 2);
+            ctx2.set("slot_test_var1", 1);
+            ctx2.print(ss);
+            nb += _assert( ss.str() == "\nslot_test_var1 : 0x1\nslot_test_var2 : 0x2\n", "Context printed in the wrong order");
+            return nb;
+        }
+
+        // Renaming a variable must also forget the slot it cached
+        unsigned int renamed_var_slot(){
+            unsigned int nb = 0;
+            Expr v = exprvar(32, "rename_test_var1");
+            VarContext ctx, ctx2;
+            ctx.set("rename_test_var1", 1);
+            nb += _assert( v->concretize(&ctx) == 1, "Concretization gave wrong result");
+
+            v->replace_name("rename_test_var2");
+            ctx2.set("rename_test_var1", 7);
+            ctx2.set("rename_test_var2", 5);
+            nb += _assert( v->concretize(&ctx2) == 5, "Renamed variable read the value of its old name");
             return nb;
         }
 
@@ -283,6 +418,10 @@ void test_expression(){
     total += hashing();
     total += concretization();
     total += change_varctx();
+    total += varctx_id();
+    total += shared_expr_varctx();
+    total += var_slots();
+    total += renamed_var_slot();
     // Return res
     cout << "\t" << total << "/" << total << green << "\t\tOK" << def << endl;
 }

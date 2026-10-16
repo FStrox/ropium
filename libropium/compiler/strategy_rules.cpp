@@ -116,10 +116,10 @@ bool StrategyGraph::rule_mov_cst_pop(node_t n, Arch* arch){
     // Set special padding at SP  offset to put the constant
     node1.special_paddings.push_back(ROPPadding());
     // Offset is the offset at which we pop the constant
-    node1.special_paddings.back().offset.make_cst(n1, PARAM_LOAD_SRC_ADDR_OFFSET, exprvar(arch->bits, node1.params[PARAM_LOAD_SRC_ADDR_OFFSET].name), new_name("padding_offset"));
+    node1.special_paddings.back().offset.make_cst(n1, PARAM_LOAD_SRC_ADDR_OFFSET, exprvar(arch->bits, node1.params[PARAM_LOAD_SRC_ADDR_OFFSET].name()), new_name("padding_offset"));
     // Padding value is just the constant
     node1.special_paddings.back().value = node.params[PARAM_MOVCST_SRC_CST];
-    node1.special_paddings.back().value.name = new_name("padding_value"); // Get a new name for the value parameter
+    node1.special_paddings.back().value.rename(new_name("padding_value")); // Get a new name for the value parameter
 
     // Add a constraint: the offset of the pop must not be too big (max 240)
     node1.strategy_constraints.push_back(
@@ -309,8 +309,8 @@ bool StrategyGraph::rule_adjust_load(node_t n, Arch* arch){
     // Cst must be the original offset (of node) minus the new one (of node2)
     Param& node_offset = node.params[node.get_param_num_src_addr_offset()];
     Param& node2_offset = node2.params[node2.get_param_num_src_addr_offset()];
-    Expr src_cst_expr = exprvar(arch->bits, node_offset.name) 
-                        - exprvar(arch->bits, node2_offset.name);
+    Expr src_cst_expr = exprvar(arch->bits, node_offset.name()) 
+                        - exprvar(arch->bits, node2_offset.name());
     node1.params[PARAM_AMOVCST_SRC_CST].make_cst(node2.id, node2.get_param_num_src_addr_offset(), 
             src_cst_expr, new_name("addr_offset"));
     node1.params[PARAM_AMOVCST_SRC_CST].add_dep(node.id, node.get_param_num_src_addr_offset());
@@ -452,8 +452,8 @@ bool StrategyGraph::rule_adjust_store(node_t n, Arch* arch){
     // Cst must be the original offset (of node) minus the new one (of node2)
     Param& node_offset = node.params[node.get_param_num_dst_addr_offset()];
     Param& node2_offset = node2.params[node2.get_param_num_dst_addr_offset()];
-    Expr src_cst_expr = exprvar(arch->bits, node_offset.name) 
-                        - exprvar(arch->bits, node2_offset.name);
+    Expr src_cst_expr = exprvar(arch->bits, node_offset.name()) 
+                        - exprvar(arch->bits, node2_offset.name());
     node1.params[PARAM_AMOVCST_SRC_CST].make_cst(node2.id, node2.get_param_num_dst_addr_offset(), 
             src_cst_expr, new_name("addr_offset"));
     node1.params[PARAM_AMOVCST_SRC_CST].add_dep(node.id, node.get_param_num_dst_addr_offset());

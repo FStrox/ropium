@@ -56,6 +56,104 @@ namespace test{
             return nb;
         }
         
+        unsigned int param_slots(){
+            unsigned int nb = 0;
+            Param param;
+            param.make_cst(1, "param_test_cst");
+            nb += _assert( param.name() == "param_test_cst", "Param: wrong name");
+            nb += _assert( param.slot() == var_slot("param_test_cst"), "Param: wrong slot");
+
+            // A copy keeps the slot, a rename looks up the new name's slot
+            Param copy = param;
+            copy.rename("param_test_renamed");
+            nb += _assert( copy.name() == "param_test_renamed" && copy.value == 1, "Param: rename() changed more than the name");
+            nb += _assert( copy.slot() == var_slot("param_test_renamed"), "Param: rename() kept the old slot");
+            nb += _assert( param.slot() == var_slot("param_test_cst"), "Param: renaming a copy changed the original");
+            return nb;
+        }
+
+        // mov X, esi; mov ebx, X (X is free)
+        static StrategyGraph* _graph_mov_ebx_esi(){
+            StrategyGraph* graph = new StrategyGraph();
+            node_t n1 = graph->new_node(GadgetType::MOV_REG);
+            node_t n2 = graph->new_node(GadgetType::MOV_REG);
+            graph->nodes[n1].params[PARAM_MOVREG_SRC_REG].make_reg(X86_ESI);
+            graph->nodes[n1].params[PARAM_MOVREG_DST_REG].make_reg(n2, PARAM_MOVREG_SRC_REG);
+            graph->nodes[n2].params[PARAM_MOVREG_SRC_REG].make_reg(X86_EDX, false); // free
+            graph->nodes[n2].params[PARAM_MOVREG_DST_REG].make_reg(X86_EBX);
+            graph->add_strategy_edge(n1, n2);
+            graph->add_param_edge(n1, n2);
+            return graph;
+        }
+
+        // A failed gadget selection must leave the param values and assigned
+        // gadgets as it found them, since the rules applied next read them
+        unsigned int failed_selection_restores_state(){
+            unsigned int nb = 0;
+            Arch* arch = new ArchX86();
+            vector<RawGadget> raw;
+            raw.push_back(RawGadget(string("\x89\xC3\xC3", 3), 1)); // mov ebx, eax; ret
+            raw.push_back(RawGadget(string("\x89\xCB\xC3", 3), 2)); // mov ebx, ecx; ret
+            raw.push_back(RawGadget(string("\x89\xF5\xFF\xE0", 4), 3)); // mov ebp, esi; jmp eax
+
+            // Both nodes have gadgets, so the search runs and tries X = eax
+            // and X = ecx, but no gadget does mov eax, esi or mov ecx, esi
+            GadgetDB db;
+            db.analyse_raw_gadgets(raw, arch);
+            StrategyGraph* graph = _graph_mov_ebx_esi();
+            vector<cst_t> before;
+            for( Node& node : graph->nodes )
+                for( int p = 0; p < node.nb_params(); p++ )
+                    before.push_back(node.params[p].value);
+
+            nb += _assert(!graph->select_gadgets(db, nullptr, arch), "Gadget selection should have failed");
+            int i = 0;
+            for( Node& node : graph->nodes ){
+                nb += _assert(node.affected_gadget == nullptr, "Failed gadget selection left a gadget assigned");
+                for( int p = 0; p < node.nb_params(); p++ )
+                    nb += _assert(node.params[p].value == before[i++], "Failed gadget selection changed a param value");
+            }
+            nb += _assert(graph->get_ropchain(arch) == nullptr, "Failed gadget selection returned a ropchain");
+            delete graph;
+
+            // With mov eax, esi the selection succeeds and is kept
+            raw.push_back(RawGadget(string("\x89\xF0\xC3", 3), 4)); // mov eax, esi; ret
+            GadgetDB db2;
+            db2.analyse_raw_gadgets(raw, arch);
+            graph = _graph_mov_ebx_esi();
+            nb += _assert(graph->select_gadgets(db2, nullptr, arch), "Gadget selection should have succeeded");
+            nb += _assert(graph->nodes[1].params[PARAM_MOVREG_SRC_REG].value == X86_EAX, "Gadget selection didn't keep its params");
+            nb += _assert_ropchain(graph->get_ropchain(arch), "Gadget selection didn't keep its gadgets");
+            delete graph;
+            delete arch;
+            return nb;
+        }
+
+        // select_gadgets() skips the search when a node can't match any gadget
+        // because of its constant params or branch type: it must not skip a
+        // graph that has a selection
+        unsigned int early_fail_branch_type(){
+            unsigned int nb = 0;
+            Arch* arch = new ArchX86();
+            GadgetDB db;
+            vector<RawGadget> raw;
+            raw.push_back(RawGadget(string("\x89\xEB\xC3", 3), 1)); // mov ebx, ebp; ret
+            raw.push_back(RawGadget(string("\x89\xF5\xFF\xE0", 4), 2)); // mov ebp, esi; jmp eax
+            db.analyse_raw_gadgets(raw, arch);
+
+            BranchType branches[] = {BranchType::ANY, BranchType::JMP, BranchType::RET};
+            bool expected[] = {true, true, false};
+            for( int i = 0; i < 3; i++ ){
+                StrategyGraph* graph = _graph_mov_ebx_esi();
+                graph->nodes[0].branch_type = branches[i]; // mov X, esi
+                nb += _assert(graph->select_gadgets(db, nullptr, arch) == expected[i],
+                              "Gadget selection: wrong result for the branch type of mov X, esi");
+                delete graph;
+            }
+            delete arch;
+            return nb;
+        }
+
         unsigned int rules(){
             unsigned int nb = 0;
             Arch* arch = new ArchX86();
@@ -284,6 +382,7 @@ namespace test{
             ropchain = sgraph2.get_ropchain(arch);
             nb += _assert_ropchain(ropchain, "Basic application of strategy rule failed");
 
+            delete arch;
             return nb;
         }
         
@@ -455,6 +554,9 @@ void test_strategy(){
     for( int i = 0; i < 1; i++){
         total += basic();
         total += rules();
+        total += failed_selection_restores_state();
+        total += early_fail_branch_type();
+        total += param_slots();
         total += test_generic_adjust_jmp();
         total += test_adjust_load();
         total += test_generic_src_transitivity();

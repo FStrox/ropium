@@ -4,27 +4,83 @@
 #include <algorithm>
 
 
+/* ============= Strategy Queue ============ */
+StrategyQueue::StrategyQueue(): _size(0){}
+
+StrategyQueue::~StrategyQueue(){
+    clear();
+}
+
+bool StrategyQueue::empty() const{
+    return _size == 0;
+}
+
+size_t StrategyQueue::size() const{
+    return _size;
+}
+
+void StrategyQueue::push_initial(StrategyGraph* graph){
+    if( _buckets.empty() || graph->size < _buckets.begin()->first ){
+        _buckets[graph->size].push_back(graph);
+    }else{
+        _buckets.begin()->second.push_back(graph);
+    }
+    _size++;
+}
+
+bool StrategyQueue::push(StrategyGraph* graph, int max_tries){
+    // The largest key is the size of the graph at the front of the old vector.
+    // (The old code read front() of an empty vector when max_tries <= 0, hence
+    // the empty() check: the graph is queued in that case.)
+    if( _size >= max_tries && !empty() && _buckets.rbegin()->first <= graph->size ){
+        return false;
+    }
+    _buckets[graph->size].push_back(graph);
+    _size++;
+    return true;
+}
+
+StrategyGraph* StrategyQueue::pop(){
+    if( empty() ){
+        throw runtime_exception("StrategyQueue::pop(): queue is empty");
+    }
+    auto smallest = _buckets.begin();
+    StrategyGraph* graph = smallest->second.back();
+    smallest->second.pop_back();
+    if( smallest->second.empty() ){
+        _buckets.erase(smallest);
+    }
+    _size--;
+    return graph;
+}
+
+void StrategyQueue::clear(){
+    for( auto& bucket : _buckets ){
+        for( StrategyGraph* g : bucket.second ){
+            delete g;
+        }
+    }
+    _buckets.clear();
+    _size = 0;
+}
+
 /* ============= Compiler Task ============ */
 CompilerTask::CompilerTask(Arch* a):arch(a){}
 
+void CompilerTask::add_initial_strategy(StrategyGraph* graph){
+    pending_strategies.push_initial(graph);
+}
+
 void CompilerTask::add_strategy(StrategyGraph* graph, int max_tries){
-    vector<StrategyGraph*>::iterator g;
-    if( pending_strategies.size() >= max_tries && pending_strategies.front()->size <= graph->size ){
+    if( !pending_strategies.push(graph, max_tries) ){
         // If strategy list is already full with smaller strategies, ignore this one
         delete graph;
-        return;
     }
-    for( g = pending_strategies.begin();
-         g != pending_strategies.end() && (*g)->size >= graph->size;
-         g++ ){}
-    pending_strategies.insert(g, graph);
-    
 }
 
 ROPChain* CompilerTask::compile(Arch* arch, GadgetDB* db, Constraint* constraint, int nb_tries){
     StrategyGraph* graph;
     ROPChain* res = nullptr;
-    nb_tries = 3000;
 
     // Set sigint handler to catch Ctrl+C
     set_sigint_handler();
@@ -36,9 +92,12 @@ ROPChain* CompilerTask::compile(Arch* arch, GadgetDB* db, Constraint* constraint
             unset_signint_handler();
             return nullptr;
         }
+        // Stop when the search deadline is reached
+        if( is_search_deadline_reached() ){
+            break;
+        }
 
-        graph = pending_strategies.back();
-        pending_strategies.pop_back();
+        graph = pending_strategies.pop();
         if( graph->select_gadgets(*db, constraint, arch) ){
             res = graph->get_ropchain(arch, constraint);
         }else{
@@ -101,9 +160,6 @@ void CompilerTask::apply_rules_to_graph(StrategyGraph* graph, int max_tries){
 }
 
 void CompilerTask::clear(){
-    for( StrategyGraph* g : pending_strategies ){
-        delete g; g = nullptr;
-    }
     pending_strategies.clear();
 }
 
@@ -114,7 +170,8 @@ CompilerTask::~CompilerTask(){
 
 
 /* ============= ROPCompiler ============= */
-ROPCompiler::ROPCompiler(Arch* a, GadgetDB *d):arch(a), db(d){}
+ROPCompiler::ROPCompiler(Arch* a, GadgetDB *d):arch(a), db(d), max_tries(DEFAULT_MAX_TRIES),
+    timeout_ms(0), last_compile_timed_out(false){}
 
 bool ROPCompiler::is_complex_instr(ILInstruction& instr, ABI abi){
     if( instr.type == ILInstructionType::SYSCALL )
@@ -128,6 +185,18 @@ bool ROPCompiler::is_complex_instr(ILInstruction& instr, ABI abi){
 }
 
 ROPChain* ROPCompiler::compile(string program, Constraint* constraint, ABI abi, System system){
+    ROPChain* res;
+    // One deadline for the whole program: all the searches it starts (one per
+    // instruction, register permutations, the syscall gadget) share it
+    SearchDeadlineScope deadline(timeout_ms);
+
+    last_compile_timed_out = false;
+    res = _compile(program, constraint, abi, system);
+    last_compile_timed_out = (res == nullptr) && search_deadline_was_reached();
+    return res;
+}
+
+ROPChain* ROPCompiler::_compile(string program, Constraint* constraint, ABI abi, System system){
     Constraint* tmp_constraint;
     ROPChain* res;
     vector<ILInstruction> final_instr;
@@ -158,7 +227,7 @@ ROPChain* ROPCompiler::compile(string program, Constraint* constraint, ABI abi, 
 }
 
 ROPChain* ROPCompiler::process_simple(vector<ILInstruction>& ins, Constraint* constraint, ABI abi, System system){
-    CompilerTask task = CompilerTask(arch);
+    CompilerTask task(arch);
     ROPChain * res = nullptr, *tmp = nullptr;
     vector<ILInstruction> instructions;
     
@@ -167,9 +236,13 @@ ROPChain* ROPCompiler::process_simple(vector<ILInstruction>& ins, Constraint* co
 
     // Compile
     for( ILInstruction& instr : instructions ){
+        vector<StrategyGraph*> graphs;
         task.clear();
-        il_to_strategy(task.pending_strategies, instr, constraint, abi, system);
-        if( (tmp = task.compile(arch, db, constraint)) != nullptr){
+        il_to_strategy(graphs, instr, constraint, abi, system);
+        for( StrategyGraph* graph : graphs ){
+            task.add_initial_strategy(graph);
+        }
+        if( (tmp = task.compile(arch, db, constraint, max_tries)) != nullptr){
             if( !res )
                 res = tmp;
             else{
@@ -185,7 +258,6 @@ ROPChain* ROPCompiler::process_simple(vector<ILInstruction>& ins, Constraint* co
 }
 
 ROPChain* ROPCompiler::process_complex(vector<ILInstruction>& ins, Constraint* constraint, ABI abi, System system){
-    CompilerTask task = CompilerTask(arch);
     ILInstruction instr =  ins[0];
 
     if( instr.type == ILInstructionType::SYSCALL ){
@@ -302,9 +374,13 @@ ROPChain* ROPCompiler::_set_registers_permutation( vector<ILInstruction>& instr,
 
     for( int i = 0; i < permutation.size(); i++ ){
         int idx = permutation[i];
+        vector<StrategyGraph*> graphs;
         tmp_perm.push_back(idx);
         task.clear();
-        il_to_strategy(task.pending_strategies, instr[idx], &constr);
+        il_to_strategy(graphs, instr[idx], &constr);
+        for( StrategyGraph* graph : graphs ){
+            task.add_initial_strategy(graph);
+        }
         // Add the register args to the constr (don't modify them)
         tmp_constr = constr;
         tmp_keep_regs.clear();
@@ -314,7 +390,7 @@ ROPChain* ROPCompiler::_set_registers_permutation( vector<ILInstruction>& instr,
                 tmp_keep_regs.push_back(instr[j].args[PARAM_MOVREG_SRC_REG]);
             }
         }
-        chain = task.compile(arch, db, &tmp_constr);
+        chain = task.compile(arch, db, &tmp_constr, max_tries);
         if( chain == nullptr ){
             if( i == 0 && tmp_keep_regs.empty()){
                 // No chain to set he first register
@@ -335,8 +411,10 @@ ROPChain* ROPCompiler::_set_registers_permutation( vector<ILInstruction>& instr,
             // Add it to res
             if( res == nullptr )
                 res = chain;
-            else
+            else{
                 res->add_chain(*chain);
+                delete chain; chain = nullptr;
+            }
             // Do not modify this dest reg later on
             constr.keep_regs.add_keep_reg(instr[idx].args[0]); // Add the dst reg to keepregs
         }
@@ -355,6 +433,10 @@ ROPChain* ROPCompiler::_set_multiple_registers(vector<ILInstruction>& instr, Con
         order.push_back(i);
 
     do{
+        // Don't start other permutations once the search deadline is reached
+        if( is_search_deadline_reached() ){
+            break;
+        }
         if( !_is_failed_permutation(failed_permutations, order)){
             res = _set_registers_permutation(instr, order, constraint, failed_permutations, failed_on_first);
             if( res ){
@@ -399,7 +481,7 @@ bool ROPCompiler::_x86_cdecl_to_strategy(StrategyGraph& graph, ILInstruction& in
         // The offset is sp_inc + arch_size_bytes*(param_num+1) (+1 because return address comes before args)
         node.special_paddings.back().offset.make_cst(
             node.id, PARAM_MOVCST_GADGET_SP_INC,
-            exprvar(arch->bits, node.params[PARAM_MOVCST_GADGET_SP_INC].name) + (arch->octets * ((i-1)+1)),
+            exprvar(arch->bits, node.params[PARAM_MOVCST_GADGET_SP_INC].name()) + (arch->octets * ((i-1)+1)),
             graph.new_name("func_arg_offset")
         );
         if( instr.args_type[i] == IL_FUNC_ARG_CST ){
@@ -422,11 +504,11 @@ bool ROPCompiler::_x86_cdecl_to_strategy(StrategyGraph& graph, ILInstruction& in
     node.special_paddings.push_back(ROPPadding());
     node.special_paddings.back().offset.make_cst(
             node.id, PARAM_MOVCST_GADGET_SP_INC,
-            exprvar(arch->bits, node.params[PARAM_MOVCST_GADGET_SP_INC].name),
+            exprvar(arch->bits, node.params[PARAM_MOVCST_GADGET_SP_INC].name()),
             graph.new_name("func_ret_addr_offset")
         );
     node.special_paddings.back().value.make_cst(node_ret.id, PARAM_LOAD_GADGET_ADDR,
-        exprvar(arch->bits, node_ret.params[PARAM_LOAD_GADGET_ADDR].name), graph.new_name("func_ret_addr"));
+        exprvar(arch->bits, node_ret.params[PARAM_LOAD_GADGET_ADDR].name()), graph.new_name("func_ret_addr"));
 
     // Add mandatory following node
     node.mandatory_following_node = node_ret.id;
@@ -457,7 +539,7 @@ bool ROPCompiler::_x86_stdcall_to_strategy(StrategyGraph& graph, ILInstruction& 
         // The offset is sp_inc + arch_size_bytes*(param_num+1) (+1 because return address comes before args)
         node.special_paddings.back().offset.make_cst(
             node.id, PARAM_MOVCST_GADGET_SP_INC,
-            exprvar(arch->bits, node.params[PARAM_MOVCST_GADGET_SP_INC].name) + (arch->octets * ((i-1)+1)),
+            exprvar(arch->bits, node.params[PARAM_MOVCST_GADGET_SP_INC].name()) + (arch->octets * ((i-1)+1)),
             graph.new_name("func_arg_offset")
         );
         if( instr.args_type[i] == IL_FUNC_ARG_CST ){
@@ -480,11 +562,11 @@ bool ROPCompiler::_x86_stdcall_to_strategy(StrategyGraph& graph, ILInstruction& 
     node.special_paddings.push_back(ROPPadding());
     node.special_paddings.back().offset.make_cst(
             node.id, PARAM_MOVCST_GADGET_SP_INC,
-            exprvar(arch->bits, node.params[PARAM_MOVCST_GADGET_SP_INC].name),
+            exprvar(arch->bits, node.params[PARAM_MOVCST_GADGET_SP_INC].name()),
             graph.new_name("func_ret_addr_offset")
         );
     node.special_paddings.back().value.make_cst(node_ret.id, PARAM_LOAD_GADGET_ADDR,
-        exprvar(arch->bits, node_ret.params[PARAM_LOAD_GADGET_ADDR].name), graph.new_name("func_ret_addr"));
+        exprvar(arch->bits, node_ret.params[PARAM_LOAD_GADGET_ADDR].name()), graph.new_name("func_ret_addr"));
 
     // Add mandatory following node
     node.mandatory_following_node = node_ret.id;
@@ -538,7 +620,7 @@ ROPChain* ROPCompiler::_compile_x64_system_v_call(ILInstruction& instr, Constrai
         // The offset is sp_inc + arch_size_bytes*(param_num+1) (+1 because return address comes before args)
         graph->nodes[call_node].special_paddings.back().offset.make_cst(
             call_node, PARAM_MOVCST_GADGET_SP_INC,
-            exprvar(arch->bits, graph->nodes[call_node].params[PARAM_MOVCST_GADGET_SP_INC].name) + (arch->octets * (i+1)),
+            exprvar(arch->bits, graph->nodes[call_node].params[PARAM_MOVCST_GADGET_SP_INC].name()) + (arch->octets * (i+1)),
             graph->new_name("func_arg_offset")
         );
         if( instr.args_type[PARAM_FUNCTION_ARGS+6+i] == IL_FUNC_ARG_CST ){
@@ -553,11 +635,11 @@ ROPChain* ROPCompiler::_compile_x64_system_v_call(ILInstruction& instr, Constrai
     graph->nodes[call_node].special_paddings.push_back(ROPPadding());
     graph->nodes[call_node].special_paddings.back().offset.make_cst(
             call_node, PARAM_MOVCST_GADGET_SP_INC,
-            exprvar(arch->bits, graph->nodes[call_node].params[PARAM_MOVCST_GADGET_SP_INC].name),
+            exprvar(arch->bits, graph->nodes[call_node].params[PARAM_MOVCST_GADGET_SP_INC].name()),
             graph->new_name("func_ret_addr_offset")
         );
     graph->nodes[call_node].special_paddings.back().value.make_cst(ret_node, PARAM_LOAD_GADGET_ADDR,
-        exprvar(arch->bits, graph->nodes[ret_node].params[PARAM_LOAD_GADGET_ADDR].name), graph->new_name("func_ret_addr"));
+        exprvar(arch->bits, graph->nodes[ret_node].params[PARAM_LOAD_GADGET_ADDR].name()), graph->new_name("func_ret_addr"));
 
     // Add 'ret' node as mandatory following node
     graph->nodes[call_node].mandatory_following_node = ret_node;
@@ -585,8 +667,8 @@ ROPChain* ROPCompiler::_compile_x64_system_v_call(ILInstruction& instr, Constrai
     
     // Get the chain that calls the function
     task.clear();
-    task.pending_strategies.push_back(graph);
-    tmp = task.compile(arch, db, &call_constr);
+    task.add_initial_strategy(graph);
+    tmp = task.compile(arch, db, &call_constr, max_tries);
 
     if( !tmp ){
         delete res;
@@ -595,6 +677,7 @@ ROPChain* ROPCompiler::_compile_x64_system_v_call(ILInstruction& instr, Constrai
     }
     // Sucess, return chain!
     res->add_chain(*tmp);
+    delete tmp; tmp = nullptr;
 
     return res;
 }
@@ -647,7 +730,7 @@ ROPChain* ROPCompiler::_compile_x64_ms_call(ILInstruction& instr, Constraint* co
         // The offset is sp_inc + arch_size_bytes*(param_num+1) (+1 because return address comes before args)
         graph->nodes[call_node].special_paddings.back().offset.make_cst(
             call_node, PARAM_MOVCST_GADGET_SP_INC,
-            exprvar(arch->bits, graph->nodes[call_node].params[PARAM_MOVCST_GADGET_SP_INC].name) + (arch->octets * (i+1)),
+            exprvar(arch->bits, graph->nodes[call_node].params[PARAM_MOVCST_GADGET_SP_INC].name()) + (arch->octets * (i+1)),
             graph->new_name("func_arg_offset")
         );
         if( instr.args_type[PARAM_FUNCTION_ARGS+4+i] == IL_FUNC_ARG_CST ){
@@ -662,11 +745,11 @@ ROPChain* ROPCompiler::_compile_x64_ms_call(ILInstruction& instr, Constraint* co
     graph->nodes[call_node].special_paddings.push_back(ROPPadding());
     graph->nodes[call_node].special_paddings.back().offset.make_cst(
             call_node, PARAM_MOVCST_GADGET_SP_INC,
-            exprvar(arch->bits, graph->nodes[call_node].params[PARAM_MOVCST_GADGET_SP_INC].name),
+            exprvar(arch->bits, graph->nodes[call_node].params[PARAM_MOVCST_GADGET_SP_INC].name()),
             graph->new_name("func_ret_addr_offset")
         );
     graph->nodes[call_node].special_paddings.back().value.make_cst(ret_node, PARAM_LOAD_GADGET_ADDR,
-        exprvar(arch->bits, graph->nodes[ret_node].params[PARAM_LOAD_GADGET_ADDR].name), graph->new_name("func_ret_addr"));
+        exprvar(arch->bits, graph->nodes[ret_node].params[PARAM_LOAD_GADGET_ADDR].name()), graph->new_name("func_ret_addr"));
 
     // Add 'ret' node as mandatory following node
     graph->nodes[call_node].mandatory_following_node = ret_node;
@@ -694,8 +777,8 @@ ROPChain* ROPCompiler::_compile_x64_ms_call(ILInstruction& instr, Constraint* co
     
     // Get the chain that calls the function
     task.clear();
-    task.pending_strategies.push_back(graph);
-    tmp = task.compile(arch, db, &call_constr);
+    task.add_initial_strategy(graph);
+    tmp = task.compile(arch, db, &call_constr, max_tries);
 
     if( !tmp ){
         delete res;
@@ -704,6 +787,7 @@ ROPChain* ROPCompiler::_compile_x64_ms_call(ILInstruction& instr, Constraint* co
     }
     // Sucess, return chain!
     res->add_chain(*tmp);
+    delete tmp; tmp = nullptr;
 
     return res;
 }
@@ -764,12 +848,13 @@ ROPChain* ROPCompiler::_compile_x86_linux_syscall(ILInstruction& instr, Constrai
     }
 
     // Get the chain to make the syscall
-    syscall_chain = compile("syscall", &syscall_constraint);
+    syscall_chain = _compile("syscall", &syscall_constraint, ABI::NONE, System::NONE);
     if( ! syscall_chain ){
         delete res;
         return nullptr;
     }else{
         res->add_chain(*syscall_chain);
+        delete syscall_chain; syscall_chain = nullptr;
     }
 
     return res;
@@ -831,12 +916,13 @@ ROPChain* ROPCompiler::_compile_x64_linux_syscall(ILInstruction& instr, Constrai
     }
 
     // Get the chain to make the syscall
-    syscall_chain = compile("syscall", &syscall_constraint);
+    syscall_chain = _compile("syscall", &syscall_constraint, ABI::NONE, System::NONE);
     if( ! syscall_chain ){
         delete res;
         return nullptr;
     }else{
         res->add_chain(*syscall_chain);
+        delete syscall_chain; syscall_chain = nullptr;
     }
 
     return res;
@@ -901,7 +987,7 @@ bool _cst_store_cst_to_strategy(StrategyGraph& graph, ILInstruction& instr, Arch
     node2.params[PARAM_MOVCST_DST_REG].make_reg(n1, PARAM_STORE_DST_ADDR_REG); // node2 X is same as addr reg in node1
     node2.params[PARAM_MOVCST_DST_REG].is_data_link = true;
     node2.params[PARAM_MOVCST_SRC_CST].make_cst(n1, PARAM_STORE_DST_ADDR_OFFSET, 
-        instr.args[PARAM_CSTSTORECST_DST_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_STORE_DST_ADDR_OFFSET].name)
+        instr.args[PARAM_CSTSTORECST_DST_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_STORE_DST_ADDR_OFFSET].name())
         , graph.new_name("cst")); // node2 cst is the target const C minus the offset in the node1 load
     
     node3.params[PARAM_MOVCST_DST_REG].make_reg(n1, PARAM_STORE_SRC_REG);
@@ -1050,7 +1136,7 @@ void ROPCompiler::il_to_strategy(vector<StrategyGraph*>& graphs, ILInstruction& 
         
         node2.params[PARAM_MOVCST_DST_REG].make_reg(n1, PARAM_LOAD_SRC_ADDR_REG); // node2 X is same as addr reg in node1
         node2.params[PARAM_MOVCST_SRC_CST].make_cst(n1, PARAM_LOAD_SRC_ADDR_OFFSET, 
-            instr.args[PARAM_LOADCST_SRC_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_LOAD_SRC_ADDR_OFFSET].name)
+            instr.args[PARAM_LOADCST_SRC_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_LOAD_SRC_ADDR_OFFSET].name())
             , graph->new_name("cst")); // node2 cst is the target const C minus the offset in the node1 load
         
         graph->add_param_edge(n2, n1);
@@ -1078,7 +1164,7 @@ void ROPCompiler::il_to_strategy(vector<StrategyGraph*>& graphs, ILInstruction& 
 
         node2.params[PARAM_MOVCST_DST_REG].make_reg(n1, PARAM_ALOAD_SRC_ADDR_REG); // node2 X is same as addr reg in node1
         node2.params[PARAM_MOVCST_SRC_CST].make_cst(n1, PARAM_ALOAD_SRC_ADDR_OFFSET, 
-            instr.args[PARAM_ALOADCST_SRC_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_ALOAD_SRC_ADDR_OFFSET].name)
+            instr.args[PARAM_ALOADCST_SRC_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_ALOAD_SRC_ADDR_OFFSET].name())
             , graph->new_name("cst")); // node2 cst is the target const C minus the offset in the node1 load
         
         graph->add_param_edge(n2, n1);
@@ -1127,7 +1213,7 @@ void ROPCompiler::il_to_strategy(vector<StrategyGraph*>& graphs, ILInstruction& 
         
         node2.params[PARAM_MOVCST_DST_REG].make_reg(n1, PARAM_STORE_DST_ADDR_REG); // node2 X is same as addr reg in node1
         node2.params[PARAM_MOVCST_SRC_CST].make_cst(n1, PARAM_STORE_DST_ADDR_OFFSET, 
-            instr.args[PARAM_CSTSTORE_DST_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_STORE_DST_ADDR_OFFSET].name)
+            instr.args[PARAM_CSTSTORE_DST_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_STORE_DST_ADDR_OFFSET].name())
             , graph->new_name("cst")); // node2 cst is the target const C minus the offset in the node1 load
         
         graph->add_param_edge(n2, n1);
@@ -1179,7 +1265,7 @@ void ROPCompiler::il_to_strategy(vector<StrategyGraph*>& graphs, ILInstruction& 
 
         node2.params[PARAM_MOVCST_DST_REG].make_reg(n1, PARAM_ASTORE_DST_ADDR_REG); // node2 X is same as addr reg in node1
         node2.params[PARAM_MOVCST_SRC_CST].make_cst(n1, PARAM_ASTORE_DST_ADDR_OFFSET, 
-            instr.args[PARAM_CSTASTORE_DST_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_ASTORE_DST_ADDR_OFFSET].name)
+            instr.args[PARAM_CSTASTORE_DST_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_ASTORE_DST_ADDR_OFFSET].name())
             , graph->new_name("cst")); // node2 cst is the target const C minus the offset in the node1 load
 
         graph->add_param_edge(n2, n1);
@@ -1272,7 +1358,7 @@ void ROPCompiler::il_to_strategy(vector<StrategyGraph*>& graphs, ILInstruction& 
         node2.params[PARAM_MOVCST_DST_REG].make_reg(n1, PARAM_ASTORE_DST_ADDR_REG); // node2 X is same as addr reg in node1
         node2.params[PARAM_MOVCST_DST_REG].is_data_link = true;
         node2.params[PARAM_MOVCST_SRC_CST].make_cst(n1, PARAM_ASTORE_DST_ADDR_OFFSET, 
-            instr.args[PARAM_CSTASTORECST_DST_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_ASTORE_DST_ADDR_OFFSET].name)
+            instr.args[PARAM_CSTASTORECST_DST_ADDR_OFFSET] - exprvar(arch->bits, node1.params[PARAM_ASTORE_DST_ADDR_OFFSET].name())
             , graph->new_name("cst")); // node2 cst is the target const C minus the offset in the node1 load
         
         node3.params[PARAM_MOVCST_DST_REG].make_reg(n1, PARAM_ASTORE_SRC_REG);

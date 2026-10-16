@@ -6,6 +6,7 @@ from ropium import *
 from prompt_toolkit import PromptSession, ANSI
 import os
 import argparse
+import math
 
 # Colors and util functions
 MAIN_COLOR_ANSI = '\033[92m'    # Default color 
@@ -50,6 +51,9 @@ keep_regs = []
 safe_mem = True
 abi = ABI.NONE
 system = OS.NONE
+DEFAULT_MAX_TRIES = 3000 # ROPium's default
+max_tries = DEFAULT_MAX_TRIES
+search_timeout = None # Seconds, None = no limit
 start_msg = "\n" + str_bold("ROPium") + " - v3.2\n"
 
 # Commands
@@ -62,6 +66,8 @@ CMD_KEEPREGS = "keepregs"
 CMD_ABI = "abi"
 CMD_OS = "os"
 CMD_SAFEMEM = "safemem"
+CMD_TIMEOUT = "timeout"
+CMD_MAXTRIES = "maxtries"
 CMD_EXIT = "exit"
 
 # Arch correspondance
@@ -110,6 +116,10 @@ def main():
                         print(safemem_help)
                     elif args[1] == "abi":
                         print(abi_help)
+                    elif args[1] == "timeout":
+                        print(timeout_help)
+                    elif args[1] == "maxtries":
+                        print(maxtries_help)
                     else:
                         print(main_help)
                 else:
@@ -142,6 +152,16 @@ def main():
             elif( command == CMD_OS ):
                 try:
                     cmd_os(args[1:])
+                except ContextException as e:
+                    error(str(e), skip=True)
+            elif( command == CMD_TIMEOUT ):
+                try:
+                    cmd_timeout(args[1:])
+                except ContextException as e:
+                    error(str(e), skip=True)
+            elif( command == CMD_MAXTRIES ):
+                try:
+                    cmd_maxtries(args[1:])
                 except ContextException as e:
                     error(str(e), skip=True)
             else:
@@ -288,6 +308,8 @@ def find(args):
     compiler.abi = abi
     compiler.os = system
     try:
+        compiler.max_tries = max_tries
+        compiler.timeout = search_timeout
         ropchain = compiler.compile(query)
     except ValueError as e:
         raise FindException(str(e))
@@ -296,6 +318,9 @@ def find(args):
     if ropchain:
         print('')
         print(ropchain.dump(tab="\t"))
+    elif compiler.timed_out:
+        warning(f"Search stopped by the {search_timeout:g} s timeout: no ROPChain found in time "
+                "(see 'help timeout')", skip=True)
     else:
         print("\n\tNo ROPChain found.")
 
@@ -502,6 +527,64 @@ def set_os(args):
         extra_args = ' '.join(args[1:])
         warning(f"Extra arguments ignored: '{extra_args}'", skip=True)
 
+# Timeout command
+def cmd_timeout(args):
+    global search_timeout
+
+    if not args:
+        print(timeout_help)
+        return
+
+    subcommand = args[0]
+    if subcommand == "set":
+        if len(args) < 2:
+            raise ContextException("Missing timeout value (in seconds)")
+        try:
+            value = float(args[1])
+        except ValueError:
+            raise ContextException(f"'{args[1]}' is not a valid number of seconds")
+        if not math.isfinite(value) or value <= 0:
+            raise ContextException("The timeout must be a positive number of seconds")
+        search_timeout = value
+        extra_args = args[2:]
+    elif subcommand == "reset":
+        search_timeout = None
+        extra_args = args[1:]
+    else:
+        raise ContextException(f"Unsupported action '{subcommand}'")
+
+    if extra_args:
+        warning(f"Extra arguments ignored: '{' '.join(extra_args)}'", skip=True)
+
+# Maxtries command
+def cmd_maxtries(args):
+    global max_tries
+
+    if not args:
+        print(maxtries_help)
+        return
+
+    subcommand = args[0]
+    if subcommand == "set":
+        if len(args) < 2:
+            raise ContextException("Missing number of tries")
+        try:
+            value = int(args[1])
+        except ValueError:
+            raise ContextException(f"'{args[1]}' is not a valid number of tries")
+        if value < 1:
+            raise ContextException("The number of tries must be at least 1")
+        max_tries = value
+        extra_args = args[2:]
+    elif subcommand == "reset":
+        max_tries = DEFAULT_MAX_TRIES
+        extra_args = args[1:]
+    else:
+        raise ContextException(f"Unsupported action '{subcommand}'")
+
+    if extra_args:
+        warning(f"Extra arguments ignored: '{' '.join(extra_args)}'", skip=True)
+
 # Help strings
 main_help = str_main(str_bold('\n\tMain Commands'))
 main_help += str_special("\n\t(For more info about a command type 'help <cmd>')")
@@ -513,6 +596,8 @@ main_help += '\n\t' + str_bold(CMD_KEEPREGS) + ': \tSet registers that must not 
 main_help += '\n\t' + str_bold(CMD_SAFEMEM) + ': \tEnable/Disable the use of unsafe gadgets'
 main_help += '\n\t' + str_bold(CMD_ABI) + ': \t\tSpecify the ABI to use when calling functions'
 main_help += '\n\t' + str_bold(CMD_OS) + ': \t\tSpecify the OS to target when doing syscalls'
+main_help += '\n\t' + str_bold(CMD_TIMEOUT) + ': \tLimit the time spent searching for a ropchain'
+main_help += '\n\t' + str_bold(CMD_MAXTRIES) + ': \tLimit the number of strategies tried per search'
 main_help += '\n\n\t' + str_bold(CMD_HELP) + ': \t\tshow this help'
 main_help += '\n\t' + str_bold(CMD_EXIT) + ': \t\texit ROPium'
 
@@ -584,6 +669,18 @@ os_help = str_main(str_bold("\n\t'os' Command"))
 os_help += str_special("\n\t(Set OS to target when doing syscalls)")
 os_help += "\n\n\t"+str_bold("Usage")+":\tos set <operating system>"
 os_help += "\n\n\t"+str_bold("Supported systems")+": "+', '.join([str_special(s) for s in str_to_os])
+
+timeout_help = str_main(str_bold("\n\t'timeout' Command"))
+timeout_help += str_special("\n\t(Limit the time spent by 'find' on one query." +
+"\n\tWhen the limit is reached, 'find' stops and reports"+ "\n\tthat it timed out: a ropchain may still exist)")
+timeout_help += "\n\n\t"+str_bold("Usage")+":\ttimeout set <seconds>"+"\n\t\ttimeout reset (no limit, the default)"
+timeout_help += "\n\n\t"+str_bold("Example")+": timeout set 2.5"
+
+maxtries_help = str_main(str_bold("\n\t'maxtries' Command"))
+maxtries_help += str_special("\n\t(Set how many chaining strategies 'find' tries for" +
+"\n\teach instruction or register to set)")
+maxtries_help += "\n\n\t"+str_bold("Usage")+":\tmaxtries set <n>"+"\n\t\tmaxtries reset ("+str(DEFAULT_MAX_TRIES)+", the default)"
+maxtries_help += "\n\n\t"+str_bold("Example")+": maxtries set 500"
 
 if __name__ == "__main__":
     main()
