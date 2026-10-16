@@ -5,251 +5,92 @@
 </p>
 
 # About
-**ROPium** (ex-ROPGenerator) is a library/tool that makes ROP-exploits easy. It automatically extracts and analyses gadgets from binaries and
-lets you find ROP-chains with semantic queries. ROPium supports *X86* and *X64* architectures, soon to be 
-extended with *ARM*.
+**ROPium** (ex-ROPGenerator) is a library/tool that makes ROP-exploits easy. It analyses the gadgets of a binary
+and lets you find ROP-chains with semantic queries. ROPium supports the *X86* and *X64* architectures.
 
 Key features:
 
    - **Effortless**: ROPium works out-of-the-box with a smooth Command Line Interface
-   - **Python API**: It is easy to integrate ROPium in script thanks to its python API
+   - **Python API**: It is easy to integrate ROPium in scripts thanks to its Python API
    - **Automatic chaining**: ROPium automatically combines gadgets to create complex ROP-chains
-   - **Advanced features**: ROPium supports function calls for various ABIs, syscalls, ...
-   - **Semantic queries**: ROPium queries are quick and convenient to write : ``rax=rbx+8``, ``[rdi+0x20]=rax``, ``rsi=[rbx+16]``, ``0x08040212(1, 2, rax)``, ``[0xdeadbeaf] = "/bin/sh\x00"``, ``sys_execve(0xdeadbeef, 0, 0)``, ``sys_0x1(0)``, ``...``
-
+   - **Advanced features**: ROPium supports function calls for various ABIs, syscalls, string writes, constraints (bad bytes, registers to keep, memory safety)
+   - **Bounded search**: impossible queries usually fail in well under a second, and a timeout bounds the rest
+   - **Semantic queries**: ROPium queries are quick and convenient to write: ``eax = ebx + 8``, ``[edi + 0x20] = eax``, ``esi = [ebx + 16]``, ``0x08040212(1, 2, eax)``, ``[0xdeadbeef] = '/bin/sh\x00'``, ``sys_0xb(0x1234, 0, 0)``
 
 # Content
 - [About](#about)
-- [Getting started](#getting-started)
-   - [CLI tool](#cli-tool)
-   - [Python API](#python-api)
-- [How it works](#how-it-works)
+- [Quick start](#quick-start)
+- [Showcase](#showcase)
 - [Installation](#installation)
 - [Usage](#usage)
-   - [CLI tool](#cli-tool-1)
-   - [Python API](#python-api-1)
-   - [Examples: one chain per sample gadget file](#examples-one-chain-per-sample-gadget-file)
+   - [CLI tool](#cli-tool)
+   - [Python API](#python-api)
    - [Query language](#query-language)
-- [Using rp++ gadget files](#using-rp-gadget-files)
+   - [Constraints and search limits](#constraints-and-search-limits)
+- [Gadget sources](#gadget-sources)
 - [Docker](#docker)
+- [How it works](#how-it-works)
+- [Known limitations](#known-limitations)
+- [Development](#development)
 - [Contact](#contact)
 - [Licence](#licence)
 - [Special thanks](#special-thanks)
 
-# Getting started
+# Quick start
 
-### CLI tool
+You can use ROPium straight from the source tree, without installing anything system-wide:
 
-Thanks to a Command-Line-Interface wrapper, you can use ROPium interactively to quickly build ropchains:  
+```bash
+sudo apt install g++ make libcapstone-dev python3-dev python3-prompt-toolkit   # Debian/Ubuntu/Kali
+make -j4                                    # builds bin/libropium.so, bin/tests and the Python module bin/ropium.so
+
+python3 examples/showcase.py                # compile the showcase queries below
+PYTHONPATH=bin python3 cli-tool/ropium      # start the interactive CLI
+```
+
+In the CLI, load one of the bundled gadget files and ask for a chain:
+
+```
+(ropium)> load_rp samples/gadgets/vulnserver_3.txt
+(ropium)> find ebx = 0xdeadbeef
+
+	0x00402673 (pop ebx; pop ebp; ret)
+	0xdeadbeef
+	0xffffffff
+```
+
+Or from Python:
+
+```python
+import sys; sys.path.insert(0, "bin")         # not needed once ROPium is installed
+from ropium import ROPium, ARCH
+
+rop = ROPium(ARCH.X86)
+rop.load_rp("samples/gadgets/efssetup.txt")
+chain = rop.compile("ecx = edx")
+print(chain.dump())
+```
 
 <p align="center">
   <img src="/ressources/ropium.gif" width="800" align="middle">
 </p>
 
-### Python API
+# Showcase
 
-Do you need to integrate ropchains directly in your scripts ? Good news, ROPium has a python API !
+Every chain below comes from the gadget files bundled in `samples/gadgets/` (32-bit Windows programs, so
+`ARCH.X86`). `python3 examples/showcase.py` reproduces all of them. The chains are printed with
+`chain.dump()`: one stack word per line, with the gadget's instructions in parentheses.
 
-Loading a binary and finding ropchains:
-```Python
-from ropium import *
-rop = ROPium(ARCH.X64)
-rop.load('/lib/x86_64-linux-gnu/libc-2.27.so')
-
-chain = rop.compile('rbx = [rax + 0x20]')
-```
-
-Dumping a ropchain in various formats:
-```Python
->>> print( chain.dump() )
-
-0x000000000009a851 (sub rax, 0x10; ret)
-0x0000000000130018 (mov rax, qword ptr [rax + 0x30]; ret)
-0x0000000000052240 (push rax; pop rbx; ret)
-
->>> print(chain.dump('python'))
-
-from struct import pack
-off = 0x0
-p = ''
-p += pack('<Q', 0x000000000009a851+off) # sub rax, 0x10; ret
-p += pack('<Q', 0x0000000000130018+off) # mov rax, qword ptr [rax + 0x30]; ret
-p += pack('<Q', 0x0000000000052240+off) # push rax; pop rbx; ret
-
->>> print(chain.dump('raw'))
-
-b'Q\xa8\t\x00\x00\x00\x00\x00\x18\x00\x13\x00\x00\x00\x00\x00@"\x05\x00\x00\x00\x00\x00'
-```
-
-Set constraints on ropchains:
-```Python
-# Bytes that should not appear in the ropchain
-rop.bad_bytes = [0x00, 0x0a, 0x0b]
-
-# Register that should not be clobbered by the ropchain
-rop.keep_regs = ['rsi', 'rdx']
-
-# Enable/Forbid ropchain to dereference registers that might hold invalid addresses
-# Safe mode is 'True' by default
-rop.safe_mem = False
-
-# Specify which ABI you want to use when calling functions
-rop.abi = ABI.X86_CDECL
-
-# Specify which system to target when doing syscalls
-rop.os = OS.LINUX
-```
-
-Bound the search time. When no chain exists, the search can run for minutes on
-large gadget sets:
-```Python
-# Stop a compile() call after 5 seconds (None, the default, means no limit)
-rop.timeout = 5
-
-chain = rop.compile('eax = ebx + ecx')
-if chain is None and rop.timed_out:
-    print("Gave up after 5 s: a chain may exist, try a larger timeout")
-
-# Number of chaining strategies tried for each instruction or register to set
-# (3000 by default). Lower values give up sooner but may miss chains.
-rop.max_tries = 3000
-```
-
-# How it works
-
-ROPium is a **ROP-chain compiler**: you describe *what* you want a chain to achieve with a semantic query
-(e.g. `eax = 0x1234`, `[eax-8] = ebx`, `sys_execve(0x1234, 0, 0)`) and it searches its gadget database
-for a gadget sequence that satisfies it, honoring constraints (bad bytes, registers to preserve, memory safety).
-
-```
-binary ──► gadget extraction (ROPgadget) ─┐
-rp++ dump ─► gadget ingestion (load_rp) ──┴─► disassembly (Capstone) → IR → symbolic execution
-             → typed gadget database → query (IL) → StrategyGraph search → ROPChain
-```
-
-A detailed walkthrough of the internals (analysis pipeline, gadget database, query language,
-strategy rules, rp++ file format parsing) is available in [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md).
-
-# Installation
-
-## Requirements
-
-- `g++` / `gcc`, `make`
-- [Capstone](https://www.capstone-engine.org/) (`libcapstone-dev`)
-- Python 3 headers (`python3-dev`, for the bindings)
-- [ROPgadget](https://github.com/JonathanSalwan/ROPgadget) on your `$PATH` (`pip install ROPgadget`) —
-  used by the `load` command to extract gadgets from binaries
-- Optionally [rp++](https://github.com/0vercl0k/rp) to pre-generate gadget files (see below)
-
-## Build & install
-
-```bash
-make            # builds bin/libropium.so, bin/tests and the Python module bin/ropium.so
-make install    # installs the lib, headers, Python module and the 'ropium' CLI
-```
-
-Use `make DEBUG=1` for a debug build, `make BINDINGS=0` to skip the Python bindings, and
-`make test` to run the unit tests.
-
-# Usage
-
-## CLI tool
-
-```bash
-ropium
-```
-
-```
-(ropium)> load -a X86 ./samples/binaries/efssetup.exe   # extract gadgets from a binary (uses ROPgadget)
-(ropium)> badbytes set 0x0a 0x00                        # avoid these bytes in the chain
-(ropium)> keepregs set esi                              # don't clobber esi
-(ropium)> timeout set 5                                 # give up a search after 5 s
-(ropium)> find eax = 0x1234                             # compile a semantic query
-```
-
-Main commands: `load`, `load_rp`, `find`, `badbytes`, `keepregs`, `safemem`, `abi`, `os`, `timeout`, `maxtries`, `help`, `exit`.
-
-## Python API
-
-```python
-from ropium import ROPium, ARCH, ABI, OS
-
-rop = ROPium(ARCH.X86)
-rop.load('./samples/binaries/efssetup.exe')   # gadget extraction via ROPgadget
-# or: rop.load_rp('samples/gadgets/efssetup.txt')  # load a pre-generated rp++ file (see below)
-
-rop.bad_bytes = [0x0a, 0x0d]                  # constraints
-rop.keep_regs = ["eax"]
-rop.safe_mem = True
-rop.abi = ABI.X86_STDCALL
-rop.os = OS.WINDOWS
-rop.timeout = 5                               # seconds per compile(), None = no limit
-
-chain = rop.compile('eax = 0x1234')           # None if no chain (rop.timed_out tells if it gave up)
-print(chain.dump())          # pretty
-print(chain.dump('python')) # struct.pack snippet
-print(chain.dump('raw'))    # raw bytes for your payload
-```
-
-See `RopChainer.py` for a runnable example.
-
-## Examples: one chain per sample gadget file
-
-The `samples/gadgets/` folder ships pre-generated rp++ dumps you can play with
-out-of-the-box. Here is one verified query for each of them — the same chains
-are obtained from the CLI with `load_rp <file>` then `find <query>`.
-
-### efssetup — move between registers (`ecx = edx`)
-
-ROPium routes the move through `eax` because no single gadget does `ecx <- edx`
-directly:
-
-```python
-from ropium import ROPium, ARCH
-
-rop = ROPium(ARCH.X86)
-rop.load_rp('samples/gadgets/efssetup.txt')
-
-chain = rop.compile('ecx = edx')
-print(chain.dump())
-```
+**Move a register through another one**: `ecx = edx` (efssetup). No gadget does `ecx <- edx`, so ROPium
+routes the value through `eax`:
 
 ```
 0x004027af (mov eax, edx; ret)
 0x0040509e (mov ecx, eax; lea esi, [ebp - 0x48]; ret)
 ```
 
-### mp3_conf — move between registers (`ebx = eax`)
-
-Here the move ends with a `mov ebx, eax; call edi` gadget, so ROPium pre-loads
-`edi`/`esi` with the addresses of harmless `ret` gadgets to survive the `call`:
-
-```python
-rop = ROPium(ARCH.X86)
-rop.load_rp('samples/gadgets/mp3_conf.txt')
-
-chain = rop.compile('ebx = eax')
-print(chain.dump())
-```
-
-```
-0x0040156f (pop edi; ret)
-0x00401552 (pop esi; ret)
-0x0041797d (mov ebx, eax; call edi)
-```
-
-### vulnserver_3 — load a constant (`ebx = 0xdeadbeef`)
-
-The chain pops the constant into `ebx`; the `0xffffffff` entries are padding for
-the extra `pop ebp` in the gadget:
-
-```python
-rop = ROPium(ARCH.X86)
-rop.load_rp('samples/gadgets/vulnserver_3.txt')
-
-chain = rop.compile('ebx = 0xdeadbeef')
-print(chain.dump())
-```
+**Load a constant**: `ebx = 0xdeadbeef` (vulnserver_3). The constant is popped from the stack, and
+`0xffffffff` fills the slot of the extra `pop ebp`:
 
 ```
 0x00402673 (pop ebx; pop ebp; ret)
@@ -257,161 +98,362 @@ print(chain.dump())
 0xffffffff
 ```
 
-### ImageLoad — move between registers (`edx = eax`)
+**Store a constant in memory**: `[ecx + 4] = 0x1234` (efssetup). `push ecx; pop edx` copies the address
+into `edx` so that a `mov [edx + 4], ebx` gadget can do the store:
 
-The `xchg` gadget clobbers several registers on its way out, so the chain carries
-four paddings (`0xffffffff`) for the extra `pop`s:
+```
+0x004012ad (pop ebx; ret)
+0x00001234
+0x004073f1 (push ecx; or al, 0x59; pop edx; ret)
+0x00401d77 (mov dword ptr [edx + 4], ebx; pop edi; pop esi; pop ebx; ret)
+0xffffffff
+0xffffffff
+0xffffffff
+```
+
+**Write a string**: `[0x0804a000] = '/bin/sh\x00'` (efssetup). Strings are written one machine word at a time:
+
+```
+0x00402aeb (pop edx; ret)
+0x0804a000
+0x00402b46 (pop eax; ret)
+0x6e69622f
+0x004030c6 (mov dword ptr [edx], eax; ret)
+0x00402aeb (pop edx; ret)
+0x0804a004
+0x00402b46 (pop eax; ret)
+0x0068732f
+0x004030c6 (mov dword ptr [edx], eax; ret)
+```
+
+**Several instructions**: `"eax = 1\nebx = 2"` (efssetup). Each line is compiled in turn and the chains are
+concatenated:
+
+```
+0x00402cc5 (mov eax, 1; ret)
+0x004012ad (pop ebx; ret)
+0x00000002
+```
+
+**Call a function**: `0x10001234(1, 2)` (efssetup). With `rop.abi = ABI.X86_CDECL` the caller cleans the
+stack, so the function returns into a `pop; pop; ret` that skips both arguments:
+
+```
+0x00401178 (ret)
+0x10001234
+0x00404ce6 (pop esi; pop edi; ret)
+0x00000001
+0x00000002
+```
+
+With `rop.abi = ABI.X86_STDCALL` the function removes its own arguments, so it returns into a plain `ret`:
+
+```
+0x00401178 (ret)
+0x10001234
+0x00401178 (ret)
+0x00000001
+0x00000002
+```
+
+**Gadgets that end with a call**: `ebx = eax` (mp3_conf). The only `mov ebx, eax` gadget ends with
+`call edi`, so ROPium first loads `edi` with the address of a `pop esi; ret` gadget (second line: it is data
+popped into `edi`, shown with its instructions). When `call edi` runs, that gadget removes the return
+address pushed by `call`, and the chain continues:
+
+```
+0x0040156f (pop edi; ret)
+0x00401552 (pop esi; ret)
+0x0041797d (mov ebx, eax; call edi)
+```
+
+**Constraints change the chain**: `ecx = edx` (efssetup) with `rop.bad_bytes = [0xaf]`. The first gadget's
+address `0x004027af` now contains a bad byte, so ROPium picks another `mov eax, edx` gadget:
+
+```
+0x00403451 (mov eax, edx; ret)
+0x0040509e (mov ecx, eax; lea esi, [ebp - 0x48]; ret)
+```
+
+**Impossible queries fail fast, long searches can be bounded** (efssetup):
 
 ```python
-rop = ROPium(ARCH.X86)
-rop.load_rp('samples/gadgets/ImageLoad.txt')
-
-chain = rop.compile('edx = eax')
-print(chain.dump())
+rop.compile("eax = ebx + ecx")   # None after ~0.4 s: these gadgets can't add two registers
+rop.timeout = 2
+rop.compile("eax = [ebx + 4]")   # None after 2 s, and rop.timed_out is True
 ```
 
+# Installation
+
+## Requirements
+
+- `g++` and `make`
+- [Capstone](https://www.capstone-engine.org/) with its headers (`libcapstone-dev`)
+- Python 3 with its headers (`python3-dev`), for the Python module
+- [prompt_toolkit](https://github.com/prompt-toolkit/python-prompt-toolkit) (`python3-prompt-toolkit` or `pip install prompt_toolkit`), for the CLI
+- Optional: [ROPgadget](https://github.com/JonathanSalwan/ROPgadget) on your `$PATH` (`pip install ROPgadget`), for the `load` command that extracts gadgets from a binary
+- Optional: [rp++](https://github.com/0vercl0k/rp), to produce gadget files for `load_rp`
+
+## Build
+
+```bash
+make -j4           # bin/libropium.so, bin/tests and the Python module bin/ropium.so
+./bin/tests        # unit tests (~15 s)
 ```
-0x10005043 (xchg eax, edx; pop edi; pop esi; pop ebp; pop ebx; ret)
-0xffffffff
-0xffffffff
-0xffffffff
-0xffffffff
+
+Options: `make DEBUG=1` (debug build), `make BINDINGS=0` (no Python module), and the opt-in
+`OPT=3`, `LTO=1`, `NATIVE=1`. **Run `make clean` after pulling or changing options**: the Makefile doesn't
+track header dependencies. Details in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+
+## Install
+
+```bash
+make install PREFIX=$HOME/.local
 ```
+
+This installs the `ropium` CLI in `~/.local/bin`, the library and header in `~/.local/lib` and
+`~/.local/include`, and the Python module in your user site-packages. The module always goes to the
+site-packages of the user who runs `make install`, so avoid `sudo make install` unless only root will use
+ROPium.
+
+You don't need to install anything to use ROPium from the source tree: run the CLI with
+`PYTHONPATH=bin python3 cli-tool/ropium`, and add `bin` to `sys.path` in scripts.
+
+# Usage
+
+## CLI tool
+
+```bash
+ropium                                      # after installing
+PYTHONPATH=bin python3 cli-tool/ropium      # from the source tree
+```
+
+```
+(ropium)> load_rp samples/gadgets/efssetup.txt   # load a gadget file (or: load -a X86 <binary>, needs ROPgadget)
+(ropium)> badbytes set 0x0a 0x0d                 # bytes the chain must not contain
+(ropium)> keepregs set edi                       # registers the chain must not modify
+(ropium)> timeout set 5                          # give up a search after 5 s
+(ropium)> find ecx = edx                         # compile a query
+
+	0x004027af (mov eax, edx; ret)
+	0x0040509e (mov ecx, eax; lea esi, [ebp - 0x48]; ret)
+
+(ropium)> help find                              # help on a command
+```
+
+| Command | Usage |
+|---|---|
+| `load` | `load [-a X86\|X64] <binary> [...]`: extract gadgets with ROPgadget |
+| `load_rp` | `load_rp [-a X86\|X64] <file>`: load an rp++ or ROPgadget dump file (default X86; use upper case) |
+| `find` | `find <query>`: compile a [query](#query-language) and print the chain |
+| `badbytes` | `badbytes set <byte> ...` / `badbytes reset` |
+| `keepregs` | `keepregs set <reg> ...` / `keepregs reset` |
+| `safemem` | `safemem set` (default) / `safemem unset` |
+| `abi` | `abi set X86_CDECL\|X86_STDCALL\|X64_SYSTEM_V\|X64_MS` (for function calls) |
+| `os` | `os set LINUX\|WINDOWS` (for syscalls) |
+| `timeout` | `timeout set <seconds>` / `timeout reset` (no limit, the default) |
+| `maxtries` | `maxtries set <n>` / `maxtries reset` (3000) |
+| `help` | `help [command]` |
+| `exit` | quit (Ctrl+D also works) |
+
+Notes:
+
+- `find` removes all spaces from the query before compiling it.
+- `badbytes set` reads `10` as decimal (0x0a); write bytes with the `0x` prefix to avoid surprises.
+- Ctrl+C during a `find` stops the search and prints `No ROPChain found.`
+- When a search hits the timeout, the CLI says so instead of printing `No ROPChain found.`
+
+## Python API
+
+```python
+import sys; sys.path.insert(0, "bin")   # only when running from the source tree
+from ropium import ROPium, ARCH, ABI, OS
+
+rop = ROPium(ARCH.X86)                  # or ARCH.X64
+rop.load_rp("samples/gadgets/efssetup.txt")   # or rop.load("program.exe") with ROPgadget installed
+
+rop.bad_bytes = [0x0a, 0x0d]           # constraints persist across compile() calls
+rop.keep_regs = ["esi", "edi"]
+rop.safe_mem = True
+rop.abi = ABI.X86_CDECL                 # needed for function calls
+rop.os = OS.LINUX                       # needed for syscalls
+rop.timeout = 5                         # seconds per compile(), None = no limit
+
+chain = rop.compile("eax = 0x1234")     # a chain, or None
+if chain is None:
+    print("timed out" if rop.timed_out else "no chain found")
+else:
+    print(chain.dump())                 # pretty text
+    payload = chain.dump("raw")         # bytes, little-endian words
+```
+
+| Member | Description |
+|---|---|
+| `ROPium(arch)` | create a ROPium object for `ARCH.X86` or `ARCH.X64` |
+| `rop.load(path)` | extract and analyse the gadgets of a binary (runs ROPgadget) |
+| `rop.load_rp(path)` | analyse the gadgets of an rp++ or ROPgadget dump file |
+| `rop.compile(query)` | return a chain, or `None`; raises `ValueError` for a malformed query and `RuntimeError` for errors such as a missing ABI |
+| `rop.bad_bytes` | list of ints (0-255) that must not appear in the chain |
+| `rop.keep_regs` | list of register names (lower case) the chain must not modify |
+| `rop.safe_mem` | `True` (default): don't use gadgets that dereference registers which aren't known to hold valid addresses |
+| `rop.abi`, `rop.os` | `ABI.X86_CDECL`, `ABI.X86_STDCALL`, `ABI.X64_SYSTEM_V`, `ABI.X64_MS` / `OS.LINUX`, `OS.WINDOWS` |
+| `rop.timeout` | seconds per `compile()` call (float), `None` (default) for no limit |
+| `rop.max_tries` | number of strategies tried per search (default 3000) |
+| `rop.timed_out` | read-only: `True` if the last `compile()` returned `None` because of the timeout |
+| `chain.dump(fmt, tab, color)` | `fmt` is `'pretty'` (default), `'raw'` (bytes) or `'python'`; arguments are positional; pass `color=False` (third argument) to drop the ANSI colors |
+| `chain1 + chain2` | concatenate two chains |
+
+With the bundled samples, this prints `pop eax; ret` followed by `0x00001234`. Note that every address in
+the samples starts with `0x00`, so `0x00` can't be a bad byte with them.
+
+Keep the `ROPium` object alive while you use its chains. The `'python'` format writes a Python-2-style
+`struct.pack` script; for payloads, prefer `dump('raw')`.
 
 ## Query language
 
+One instruction per line (separate lines with `\n` in Python):
+
 ```
-eax = 0x42                    # set register to constant
-eax = ebx ^ 3                 # register arithmetic/logic ops
+eax = 0x42                    # set a register to a constant
+eax = ebx                     # copy a register
+eax = ebx ^ 3                 # register OP constant
+eax = ebx & ecx               # register OP register
 eax = [ebx + 16]              # load from memory
-[eax - 8] = ebx               # store to memory
-[0x12345678] = '/bin/sh\x00'  # write a string
-0x08040120(1, 2, 3)           # call function (requires 'abi set ...')
-sys_execve(0x1234, 0, 0)      # Linux syscall by name (requires 'os set LINUX')
-sys_0xb(0x1234, 0, 0)         # Linux syscall by number
+eax = [0x12345678]            # load from a constant address
+eax += [ebx + 16]             # register OP= memory
+[eax - 8] = ebx               # store a register
+[eax + 4] = 0x42              # store a constant
+[eax + 4] += ebx              # memory OP= register
+[0x12345678] = '/bin/sh\x00'  # write a string (constant address only)
+0x08040120(1, 2, 3)           # call a function (set an ABI first)
+sys_0xb(0x1234, 0, 0)         # Linux syscall by number (set the OS first)
+sys_execve(0x1234, 0, 0)      # Linux syscall by name (x64 numbering, see below)
+syscall                       # just a syscall gadget
 ```
 
-# Using rp++ gadget files
+- Operators: `+ * / % & | ^ << >>`. There is no `-` operator: write `eax = ebx + -3`. `OP=` only works with
+  a memory operand (`eax += [ebx]` works, `eax += 2` doesn't).
+- Registers are lower case. Constants are decimal or hexadecimal (`0x...`), possibly negative.
+- Lines are compiled one after the other, independently: check that a later line doesn't clobber what an
+  earlier one set.
+- Syscall names use the x64 Linux numbers even on x86 ([known issue](docs/KNOWN_ISSUES.md#1-chains-that-are-wrong-at-runtime)):
+  use `sys_<number>` on x86.
 
-ROPium can ingest gadget listings produced by [rp++](https://github.com/0vercl0k/rp)
-(a fast ROP gadget finder for PE/ELF/Mach-O binaries) instead of running ROPgadget itself.
-This is handy to analyze Windows binaries from Linux, to reuse an existing rp++ dump, or to
-mix gadget sources. The `samples/` folder already demonstrates this integration:
+## Constraints and search limits
 
-- `samples/tools/rp-win_x86_v6.exe` — bundled rp++ v2.1.5 (x86 Windows build; run it with Wine)
-- `samples/binaries/*.exe` — sample PE32 targets (`efssetup.exe`, `QuoteDB.exe`, `vulnserver.exe`)
-- `samples/gadgets/*.txt` — pre-generated rp++ dumps of those binaries, ready for `load_rp`
+| Constraint | Python | CLI |
+|---|---|---|
+| Bytes that must not appear in addresses, constants or padding | `rop.bad_bytes = [0x00, 0x0a]` | `badbytes set 0x00 0x0a` |
+| Registers that must keep their value | `rop.keep_regs = ["esi"]` | `keepregs set esi` |
+| Memory safety (on by default) | `rop.safe_mem = False` to allow any dereference | `safemem unset` |
+| Calling convention for function calls | `rop.abi = ABI.X86_STDCALL` | `abi set X86_STDCALL` |
+| Target OS for syscalls | `rop.os = OS.LINUX` | `os set LINUX` |
+| Time limit per query | `rop.timeout = 5` | `timeout set 5` |
+| Strategies tried per search | `rop.max_tries = 3000` | `maxtries set 3000` |
 
-## Step 1 — Generate a gadget file with rp++
+When no chain exists, ROPium usually proves it quickly. Some searches still explore many combinations
+(minutes on large gadget sets), which is what `timeout` is for. `None` with `rop.timed_out == False` means
+the search finished without finding a chain.
+
+# Gadget sources
+
+ROPium re-analyses the raw bytes of every gadget itself, so you can feed it gadgets in two ways:
+
+- **`load <binary>`** runs `ROPgadget --binary <binary> --dump --all --depth 15` (ROPgadget must be on `PATH`;
+  otherwise nothing is loaded).
+- **`load_rp <file>`** reads a gadget listing that includes the gadget bytes, as produced by
+  [rp++](https://github.com/0vercl0k/rp) with `--print-bytes` or by `ROPgadget --dump`. This is handy to
+  analyse Windows binaries from Linux, or to reuse a listing.
+
+Both fill the same gadget database, so you can mix sources (e.g. a program and a DLL it loads). The
+architecture is fixed when the `ROPium` object is created and must match the gadgets.
+
+**Bundled samples** (`samples/`):
+
+| File | Format | From |
+|---|---|---|
+| `gadgets/efssetup.txt` | ROPgadget `--dump` | `binaries/efssetup.exe` |
+| `gadgets/vulnserver_3.txt` | ROPgadget `--dump` | `binaries/vulnserver.exe` |
+| `gadgets/mp3_conf.txt` | rp++ | RM2MP3Converter.exe (not included) |
+| `gadgets/ImageLoad.txt` | rp++ | ImageLoad.dll (not included) |
+| `tools/rp-win_x86_v6.exe` | rp++ v2.1.5, Windows x86 build (runs under Wine) | |
+
+**Generating a file with rp++**:
 
 ```bash
-# Windows (or via Wine on Linux):
-rp-win_x86_v6.exe -f efssetup.exe -r 10 --print-bytes > efssetup.txt
-
-# Recommended: deduplicate gadgets for a smaller/faster load
-rp-win_x86_v6.exe -f efssetup.exe -r 10 --print-bytes --unique > efssetup.txt
+rp-win_x86_v6.exe -f program.exe -r 10 --print-bytes --unique > program.txt
 ```
 
-**`--print-bytes` is required**: ROPium re-disassembles the raw bytes of each gadget itself,
-so the listing must contain them. Useful rp++ flags:
-
-| Flag | Meaning |
-|---|---|
-| `-f, --file <path>` | binary to analyze |
-| `-r, --rop <n>` | max instructions per gadget (default 5) |
-| `--print-bytes` | print gadget bytes (**required for ROPium**) |
-| `--unique` | keep only unique gadgets |
-| `--va <base>` | override the image base address |
-| `--raw` | analyze a raw file |
-| `--allow-branches` | allow branches inside gadgets |
-| `--max-thread <n>` | cap worker threads |
-
-The resulting file looks like (both formats below are accepted):
+`--print-bytes` is required (the bytes are the last field of each line); `-r` sets the maximum number of
+instructions per gadget, and `--unique` keeps one line per gadget. Accepted line formats:
 
 ```
-0x00403e23 : aaa ; xor eax, eax ; jmp 0x403e30 // 37383941424344454633c0eb00
-0x4236a3: aaa ; add [eax], eax ; pop edi ; pop esi ; ret ; \x37\x3e\x01\x00\x5f\x5e\xc3 (1 found)
-```
-
-## Step 2 — Load the gadgets in ROPium
-
-CLI:
-
-```
-(ropium)> load_rp samples/gadgets/efssetup.txt
-(ropium)> find eax = 0x1234
-```
-
-Python:
-
-```python
-rop = ROPium(ARCH.X86)
-rop.load_rp('samples/gadgets/efssetup.txt')
-chain = rop.compile('eax = 0x1234')
+0x4236a3: aaa ; add [eax], eax ; pop edi ; pop esi ; ret ; \x37\x3e\x01\x00\x5f\x5e\xc3 (1 found)   # rp++
+0x00403e23 : aaa ; xor eax, eax ; jmp 0x403e30 // 37383941424344454633c0eb00                      # ROPgadget --dump
 ```
 
 Notes:
 
-- The architecture is fixed when creating the `ROPium` object (`ARCH.X86` for the 32-bit
-  samples); make sure the rp++ dump matches it.
-- `load` (ROPgadget) and `load_rp` (rp++) fill the same gadget database, so you can mix
-  sources — e.g. load a binary plus an rp++ dump of a DLL it uses.
-- rp++ is only used offline to produce the text file; ROPium performs its own semantic
-  analysis of the gadget bytes.
+- The file must be UTF-8: rp++ output redirected by PowerShell is UTF-16, so convert it first
+  (`iconv -f utf-16 -t utf-8 in.txt > out.txt`).
+- Gadget addresses must currently be below `0x80000000` (see [known limitations](#known-limitations)).
 
 # Docker
 
-You can run ROPium in a Docker container — handy if you don't want to install the
-build dependencies (Capstone, Python headers, ROPgadget) on your host. The image is
-based on `python:3.9-slim-bullseye` and already contains everything needed.
-
-## Build the image
+The image builds ROPium and starts the CLI:
 
 ```bash
 docker build . --tag ropium
-```
-
-## Option 1 — Run commands without entering the container
-
-Mount the repository at `/ropium` and pass any command with `-c`. Build once, then
-run the tests or the Python API directly from your host shell:
-
-```bash
-# Build the library, bindings and tests inside the container
-docker run --rm -v "$(pwd)":/ropium/ ropium -c "cd /ropium && make"
-
-# Run the unit tests
-docker run --rm -v "$(pwd)":/ropium/ ropium -c "cd /ropium && ./bin/tests"
-
-# Compile a chain from the Python API (one-liner)
-docker run --rm -v "$(pwd)":/ropium/ ropium -c "cd /ropium && python3 -c \"
-import sys; sys.path.insert(0, './bin')
-from ropium import ROPium, ARCH
-rop = ROPium(ARCH.X86)
-rop.load_rp('samples/gadgets/efssetup.txt')
-print(rop.compile('ecx = edx').dump())
-\""
-```
-
-> **Note:** the Python module is built as `bin/ropium.so`. When it isn't installed
-> system-wide, add `sys.path.insert(0, './bin')` before importing it (as above).
-
-## Option 2 — Interactive shell in the container
-
-```bash
-# Drop into a shell with the repo mounted at /ropium
-# (add -v /FULL/HOST/PATH/FILE:/tmp/FILE:ro to also mount a binary to analyze)
-docker run --rm -it -v "$(pwd)":/ropium/ ropium
-
-cd /ropium
-make clean && make && make install
-ropium   # start the interactive CLI
+docker run --rm -it -v "$(pwd)/samples":/samples:ro ropium
 ```
 
 ```
-(ropium)> load -a X86 /tmp/FILE        # or: load_rp samples/gadgets/efssetup.txt
-(ropium)> find eax = 0x1234
+(ropium)> load_rp /samples/gadgets/efssetup.txt
+(ropium)> find ecx = edx
 ```
+
+Mount the directory holding your own gadget files or binaries the same way. The image doesn't contain a
+compiler: rebuild it after changing the code.
+
+# How it works
+
+ROPium is a **ROP-chain compiler**:
+
+1. **Analysis.** Each gadget is disassembled (Capstone), lifted to an intermediate representation and
+   executed symbolically. Gadgets with a known stack effect that end in `ret`, `jmp reg`, `call reg` or a
+   syscall are filed in a database indexed by what they compute (`reg <- reg`, `reg <- [reg + off]`,
+   `[reg + off] <- reg`, ...).
+2. **Compilation.** A query becomes a small graph of abstract gadget slots. ROPium searches for real
+   gadgets that fill the slots while respecting the constraints. When that fails, it rewrites the graph
+   into alternatives (go through another register, pop the constant from the stack, end with `jmp reg`
+   instead of `ret`, ...) and tries again, smallest graphs first.
+
+```
+binary ──► ROPgadget ─┐
+gadget dump file ─────┴─► disassembly → IR → symbolic execution → gadget database
+query ──► parser → strategy graph → search (rewrite rules + gadget selection) → ROP chain
+```
+
+The full walkthrough is in [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md).
+
+# Known limitations
+
+The most important ones (full list with details in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md)):
+
+- **Check the chains you use.** A few gadget shapes are analysed incorrectly, which can yield a wrong
+  chain: gadgets that write to the stack and read it back in the same gadget (e.g. `pushal; pop ebx; ret`),
+  and some store or arithmetic queries where a gadget clobbers an input register.
+- Syscall names use the x64 numbers on x86 (use `sys_<number>`), and `X64_MS` calls use the wrong argument
+  registers.
+- Gadgets with shifts, rotates, `cmov`, `setcc`, `movsx`, conditional jumps, `ret <n>`, `sbb` or `endbr64`
+  are not used.
+- Gadget addresses must be below `0x80000000`; higher addresses abort the program.
+- An empty query crashes the Python interpreter; `load()` without ROPgadget silently loads nothing.
+
+# Development
+
+Building, unit tests, the chain regression fixture, profiling and the rules for changing the search are
+described in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 # Contact
 
@@ -424,8 +466,7 @@ ROPium is provided under the MIT licence.
 Contributors:
    -  Docker container support: [migounette](https://github.com/migounette), [clslgrnc](https://github.com/clslgrnc)
 
-ROPium uses the following awesome projects: 
+ROPium uses the following awesome projects:
    - [capstone](https://github.com/aquynh/capstone) : Disassembly Framework
    - [ROPgadget](https://github.com/JonathanSalwan/ROPgadget) : Gadget extractor
    - [prompt-toolkit](https://github.com/prompt-toolkit/python-prompt-toolkit) : Python CLI interface library
-
