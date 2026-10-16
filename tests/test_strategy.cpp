@@ -284,6 +284,7 @@ namespace test{
             ropchain = sgraph2.get_ropchain(arch);
             nb += _assert_ropchain(ropchain, "Basic application of strategy rule failed");
 
+            delete arch;
             return nb;
         }
         

@@ -411,8 +411,10 @@ ROPChain* ROPCompiler::_set_registers_permutation( vector<ILInstruction>& instr,
             // Add it to res
             if( res == nullptr )
                 res = chain;
-            else
+            else{
                 res->add_chain(*chain);
+                delete chain; chain = nullptr;
+            }
             // Do not modify this dest reg later on
             constr.keep_regs.add_keep_reg(instr[idx].args[0]); // Add the dst reg to keepregs
         }
@@ -675,6 +677,7 @@ ROPChain* ROPCompiler::_compile_x64_system_v_call(ILInstruction& instr, Constrai
     }
     // Sucess, return chain!
     res->add_chain(*tmp);
+    delete tmp; tmp = nullptr;
 
     return res;
 }
@@ -784,6 +787,7 @@ ROPChain* ROPCompiler::_compile_x64_ms_call(ILInstruction& instr, Constraint* co
     }
     // Sucess, return chain!
     res->add_chain(*tmp);
+    delete tmp; tmp = nullptr;
 
     return res;
 }
@@ -850,6 +854,7 @@ ROPChain* ROPCompiler::_compile_x86_linux_syscall(ILInstruction& instr, Constrai
         return nullptr;
     }else{
         res->add_chain(*syscall_chain);
+        delete syscall_chain; syscall_chain = nullptr;
     }
 
     return res;
@@ -917,6 +922,7 @@ ROPChain* ROPCompiler::_compile_x64_linux_syscall(ILInstruction& instr, Constrai
         return nullptr;
     }else{
         res->add_chain(*syscall_chain);
+        delete syscall_chain; syscall_chain = nullptr;
     }
 
     return res;
